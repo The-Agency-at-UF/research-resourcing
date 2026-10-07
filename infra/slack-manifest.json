@@ -6,8 +6,8 @@
   },
   "features": {
     "bot_user": { "display_name": "Research Resourcing Dev", "always_online": false },
-    "slash_commands": [{ "command": "/resource-demo", "description": "Show fictional staffing recommendations", "should_escape": false }]
+    "slash_commands": [{ "command": "/resource-demo", "description": "Try fictional staffing recommendations", "usage_hint": "[form]", "should_escape": false }]
   },
   "oauth_config": { "scopes": { "bot": ["commands", "chat:write"] } },
-  "settings": { "socket_mode_enabled": true, "org_deploy_enabled": false, "token_rotation_enabled": false }
+  "settings": { "socket_mode_enabled": true, "interactivity": { "is_enabled": true }, "org_deploy_enabled": false }
 }

@@ -8,7 +8,7 @@
 | Excel parsing | ExcelJS | Installed and smoke tested; column mapping pending |
 | Microsoft authentication | MSAL Node and Microsoft Graph | Delegated sign-in diagnostic ready; tenant/app access pending |
 | Ranking | Pure TypeScript weighted scoring | Working: five retained, two or three displayed |
-| Slack | Bolt JS, local Socket Mode | Manifest and fictional `/resource-demo` command ready; app install pending |
+| Slack | Bolt JS, local Socket Mode | Fixed demo and request form implemented; bot access verified; enable app interactivity and complete manual form verification |
 | Compute | AWS Lambda Node.js 24 | Direct-invoke handler and bundle ready; not deployed |
 | Storage | DynamoDB | Optional transaction adapter and undeployed SAM run/result tables |
 | Explanations | Factual templates; optional Gemini later | No model calls in current demo |
@@ -19,7 +19,7 @@ The source diagram proposes OpenAI. Roger already has Gemini access, so this set
 
 The SAM template includes scoring and recommendation audit storage only. Managers, Researchers, Accounts, Assignments, and ScoringWeights from the complete diagram belong to later data/approval work. The direct handler does not automatically call persistence and has no DynamoDB access policy yet. Connect through a trusted service and add narrowly scoped table permissions when enabling persistence. The CLI already retains the top five locally in `artifacts/recommendation-run.json`.
 
-Socket Mode needs a long-running process. Production Lambda needs an HTTPS Slack receiver with signature verification and prompt acknowledgement, or a separately hosted persistent Socket Mode process. The local Slack script is not the Lambda deployment path.
+Socket Mode needs a long-running process. Production Lambda needs an HTTPS Slack receiver with signature verification and prompt acknowledgement, or a separately hosted persistent Socket Mode process. The local Slack script is not the Lambda deployment path. `/resource-demo form` opens the fictional-data request modal; its submission is validated and scored using startup-loaded fixtures before a modal acknowledgement updates the private result. Local audit writes run after acknowledgement. Manager authorization and assignment approvals are not implemented.
 
 ## Fine-tuning
 
