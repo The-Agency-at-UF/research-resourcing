@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { recommend } from './recommendations/scoring.js';
 import { registerDemoHandlers } from './slack/handlers.js';
-import { explainWithGemini } from './integrations/gemini.js';
+import { explainWithGemini, GEMINI_BASE_MODEL } from './integrations/gemini.js';
 
 const token = process.env.SLACK_BOT_TOKEN;
 const appToken = process.env.SLACK_APP_TOKEN;
@@ -21,7 +21,7 @@ registerDemoHandlers(app, teamId, data, async (run, explanation) => {
     const runId = randomUUID();
     await mkdir('artifacts/slack-runs', { recursive: true });
     await writeFile(`artifacts/slack-runs/${runId}.json`, JSON.stringify({ runId, createdAt: new Date().toISOString(), ...run,
-      ...(explanation ? { explanation, model: process.env.GEMINI_MODEL } : {}),
+      ...(explanation ? { explanation, model: process.env.GEMINI_MODEL || GEMINI_BASE_MODEL } : {}),
     }, null, 2), { mode: 0o600 });
   } catch {
     console.error('The result was shown, but the local demo record could not be saved. Check artifacts/slack-runs permissions.');

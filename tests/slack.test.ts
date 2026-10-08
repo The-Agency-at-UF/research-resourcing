@@ -154,6 +154,10 @@ test('AI command acknowledges before generation, privately displays validated fa
     }) });
   });
   await h.command('ai');
+  assert.equal(h.responses.length, 2);
+  assert.match(JSON.stringify(h.responses[0]), /10 retries against the same model/);
+  assert.match(JSON.stringify(h.responses[1]), /replace_original.*true/);
+  assert.match(JSON.stringify(h.responses[1]), /Provider requests: 1/);
   assert.match(JSON.stringify(h.responses), /Gemini connected: verified fact selection/);
   assert.match(JSON.stringify(h.responses), /ephemeral/);
   assert.equal(h.explanations[0]?.source, 'gemini');

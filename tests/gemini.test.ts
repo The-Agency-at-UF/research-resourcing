@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { recommend } from '../src/recommendations/scoring.js';
 import { managerMessage } from '../src/recommendations/presentation.js';
-import { explainWithGemini, validateSelections, type GenerateSelection } from '../src/integrations/gemini.js';
+import { explainWithGemini, validateSelections, GEMINI_BASE_MODEL, GEMINI_MAX_RETRIES, GEMINI_TIMEOUT_MS, type GenerateSelection } from '../src/integrations/gemini.js';
 
 const load = (path: string) => JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8'));
 const researchers = load('../fixtures/researchers.json');
@@ -75,8 +75,59 @@ test('provider receives bounded displayed evidence without tools or researcher n
     assert.equal(input.dataMode,'fictional_demo'); assert.equal(input.displayed[0].name,undefined);
     assert.equal(input.excluded,undefined); assert.equal(params.config?.systemInstruction,instructions);
     assert.equal(params.config?.responseMimeType,'application/json');
-    assert.equal(params.config?.maxOutputTokens,800); assert.equal(params.config?.httpOptions?.timeout,10000);
+    assert.equal(params.config?.maxOutputTokens,800); assert.equal(params.config?.httpOptions?.timeout,GEMINI_TIMEOUT_MS);
     assert.equal(params.config?.tools,undefined);
     return {text:JSON.stringify(selection())};
   }));
+});
+
+test('transient errors retry the 3.8 base model with fresh deadlines and unchanged input', async () => {
+  for (const status of [408, 429, 500, 503, 504]) {
+    const seen: Parameters<GenerateSelection>[0][] = [];
+    const waits: number[] = [];
+    const result = await explainWithGemini(run(), { systemInstruction: instructions,
+      waitForRetry: async milliseconds => { waits.push(milliseconds); },
+      generate: async params => {
+        seen.push(params);
+        if (seen.length < 3) throw Object.assign(new Error('transient'), {status});
+        return {text: JSON.stringify(selection())};
+      },
+    });
+    assert.equal(result.source, 'gemini'); assert.equal(result.attempts, 3);
+    assert.deepEqual(waits, [1000, 2000]);
+    assert.ok(seen.every(params => params.model === GEMINI_BASE_MODEL));
+    assert.ok(seen.every(params => params.contents === seen[0]!.contents));
+    assert.ok(seen.every(params => params.config?.httpOptions?.retryOptions?.attempts === 1));
+    assert.equal(new Set(seen.map(params => params.config?.abortSignal)).size, 3);
+  }
+});
+
+test('retry exhaustion makes exactly eleven requests to the same model, including local timeouts', async () => {
+  for (const error of [Object.assign(new Error('provider unavailable'), {status:503}), new DOMException('timed out', 'TimeoutError')]) {
+    let calls = 0; const waits: number[] = [];
+    const result = await explainWithGemini(run(), {systemInstruction: instructions,
+      waitForRetry: async milliseconds => { waits.push(milliseconds); },
+      generate: async params => { calls++; assert.equal(params.model, 'gemini-3.8-flash'); throw error; },
+    });
+    assert.equal(calls, GEMINI_MAX_RETRIES + 1); assert.equal(result.attempts, 11);
+    assert.equal(waits.length, 10); assert.ok(waits.every(ms => ms <= 2000));
+    assert.equal(result.source, 'template'); assert.equal(result.reason, 'model_unavailable');
+    assert.equal(result.message, managerMessage(run()));
+  }
+});
+
+test('authentication, configuration, and invalid output do not trigger retries or model switching', async () => {
+  for (const status of [400, 401, 403, 404]) {
+    let calls = 0;
+    const result = await explainWithGemini(run(), {systemInstruction: instructions,
+      waitForRetry: async () => { assert.fail('Must not wait'); },
+      generate: async params => { calls++; assert.equal(params.model, GEMINI_BASE_MODEL); throw Object.assign(new Error('terminal'), {status}); },
+    });
+    assert.equal(calls, 1); assert.equal(result.attempts, 1);
+  }
+  let calls = 0;
+  const result = await explainWithGemini(run(), {systemInstruction: instructions,
+    generate: async () => { calls++; return {text: 'invalid JSON'}; },
+  });
+  assert.equal(calls, 1); assert.equal(result.reason, 'invalid_output');
 });
