@@ -1,0 +1,48 @@
+{
+  "name": "research-resourcing",
+  "version": "0.1.0",
+  "description": "Research staffing recommendations with manager approval",
+  "scripts": {
+    "demo": "tsx src/demo.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "build:lambda": "esbuild src/lambda.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/lambda.mjs",
+    "access:check": "node --env-file-if-exists=.env --import tsx src/scripts/check-access.ts",
+    "microsoft:check": "node --env-file=.env --import tsx src/scripts/check-microsoft.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/The-Agency-at-UF/research-resourcing.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/The-Agency-at-UF/research-resourcing/issues"
+  },
+  "homepage": "https://github.com/The-Agency-at-UF/research-resourcing#readme",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1147.0",
+    "@aws-sdk/lib-dynamodb": "^3.1147.0",
+    "@azure/msal-node": "^7.0.1",
+    "exceljs": "^4.4.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.1",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "^11.1.1"
+    }
+  }
+}

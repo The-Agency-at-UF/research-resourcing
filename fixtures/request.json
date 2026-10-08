@@ -1,0 +1,11 @@
+{
+  "accountId": "sample-health",
+  "accountName": "Fictional Health Account",
+  "hoursPerResearcher": 4,
+  "openings": 2,
+  "requiredSkills": ["survey-design"],
+  "preferredSkills": ["data-analysis", "interviewing"],
+  "minimumExperienceYears": 0,
+  "careerInterests": ["consumer-research"],
+  "industryId": "healthcare"
+}
