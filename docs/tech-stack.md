@@ -8,10 +8,10 @@
 | Excel parsing | ExcelJS | Installed and smoke tested; column mapping pending |
 | Microsoft authentication | MSAL Node and Microsoft Graph | Delegated sign-in diagnostic ready; tenant/app access pending |
 | Ranking | Pure TypeScript weighted scoring | Working: five retained, two or three displayed |
-| Slack | Bolt JS local Socket Mode | Fixed demo, request form, private results, and local run records; see [setup](slack-demo.md) |
+| Slack | Bolt JS local Socket Mode | Fixed demo, request form, opt-in Gemini sample, private results, and local run records; see [setup](slack-demo.md) |
 | Compute | AWS Lambda Node.js 24 | Direct-invoke handler and bundle ready; not deployed |
 | Storage | DynamoDB | Optional transaction adapter and undeployed SAM run/result tables |
-| Explanations | Factual templates; opt-in Gemini fact selection | CLI adapter with system instructions, strict validation, and fallback |
+| Explanations | Factual templates; opt-in Gemini fact selection | CLI and Slack adapter with system instructions, strict validation, and labeled fallback |
 
 Node 24 is supported by [AWS Lambda](https://docs.aws.amazon.com/lambda/latest/dg/lambda-nodejs.html). Use the same major locally and in CI. Roger's system Node was 25.9.0; verification runs with bundled Node 24 without changing that installation.
 

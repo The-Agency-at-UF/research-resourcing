@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { recommend } from './recommendations/scoring.js';
 import { registerDemoHandlers } from './slack/handlers.js';
+import { explainWithGemini } from './integrations/gemini.js';
 
 const token = process.env.SLACK_BOT_TOKEN;
 const appToken = process.env.SLACK_APP_TOKEN;
@@ -14,14 +15,17 @@ if (identity.team_id !== teamId) throw new Error('Slack token belongs to a diffe
 const load = async (file: string) => JSON.parse(await readFile(file, 'utf8'));
 const data = { researchers: await load('fixtures/researchers.json'), request: await load('fixtures/request.json'), config: await load('config/scoring.json') };
 recommend(data.researchers, data.request, data.config); // Fail at startup if fixtures or configuration are invalid.
-registerDemoHandlers(app, teamId, data, async run => {
+const systemInstruction = await readFile('config/gemini-system-instructions.md', 'utf8');
+registerDemoHandlers(app, teamId, data, async (run, explanation) => {
   try {
     const runId = randomUUID();
     await mkdir('artifacts/slack-runs', { recursive: true });
-    await writeFile(`artifacts/slack-runs/${runId}.json`, JSON.stringify({ runId, createdAt: new Date().toISOString(), ...run }, null, 2), { mode: 0o600 });
+    await writeFile(`artifacts/slack-runs/${runId}.json`, JSON.stringify({ runId, createdAt: new Date().toISOString(), ...run,
+      ...(explanation ? { explanation, model: process.env.GEMINI_MODEL } : {}),
+    }, null, 2), { mode: 0o600 });
   } catch {
     console.error('The result was shown, but the local demo record could not be saved. Check artifacts/slack-runs permissions.');
   }
-});
+}, run => explainWithGemini(run, { apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL, systemInstruction }));
 await app.start();
-console.log('Fictional staffing demo connected. Run /resource-demo or /resource-demo form in the configured workspace.');
+console.log('Fictional staffing demo connected. Run /resource-demo, /resource-demo form, or /resource-demo ai in the configured workspace.');

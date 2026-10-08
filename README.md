@@ -70,8 +70,8 @@ Try 40 hours/week for a no-match result or 10 openings for a shortage. Fixtures 
 
 This phase implements scoring, a fictional-data Slack demo, and technology/access scaffolding. Live Excel parsing/sync, date-aware capacity, manager authorization, approvals, verified updates to both Excel datasets, operations notifications, and Slack Canvas updates remain future work. Eligibility must be rechecked against fresh data before saving approved assignments; partial Excel updates must be reconciled.
 
-See [technology notes](docs/tech-stack.md) for working features versus prepared integration pieces. Gemini is optional for CLI explanations and never determines scores. Fine-tuning is not required.
+See [technology notes](docs/tech-stack.md) for working features versus prepared integration pieces. Gemini is optional for explanations and never determines scores. Fine-tuning is not required.
 
 ## Optional Gemini explanations
 
-Set `GEMINI_API_KEY` and `GEMINI_MODEL` in the ignored `.env`, then run `npm run demo:gemini`. Gemini selects which verified facts to emphasize; code validates and renders those facts. Scores, ordering, warnings, and manager approval remain under application control. Invalid output or provider failure uses the full factual-template fallback. See [system instructions and guardrails](docs/gemini-guardrails.md). This CLI does not post to Slack or update Excel.
+Set `GEMINI_API_KEY` and `GEMINI_MODEL` in the ignored `.env`, then run `npm run demo:gemini` or start `npm run slack:demo` and use `/resource-demo ai`. Gemini selects which verified facts to emphasize; code validates and renders those facts. Scores, ordering, warnings, and manager approval remain under application control. Invalid output or provider failure uses the full factual-template fallback, labeled explicitly in Slack. See [system instructions and guardrails](docs/gemini-guardrails.md). Only the Slack command sends a private response; neither mode updates Excel.

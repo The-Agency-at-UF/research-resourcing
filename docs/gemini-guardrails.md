@@ -28,7 +28,11 @@ npm run demo:gemini
 npm run demo:gemini -- fixtures/request-no-match.json
 ```
 
-Results are saved to ignored `artifacts/gemini-demo.json`, with the untouched run, explanation source, and validated fact selections. This opt-in CLI demo uses fictional data only and does not post to Slack or update Excel. The separate Slack demo integration is unchanged and continues using factual templates.
+Results are saved to ignored `artifacts/gemini-demo.json`, with the untouched run, explanation source, and validated fact selections.
+
+To test the same connection privately in Slack, start `npm run slack:demo` and run `/resource-demo ai`. No new slash command or Slack scope is needed. The command acknowledges immediately, then calls Gemini with the fictional sample shortlist. Its ephemeral response says either `Gemini connected: verified fact selection` or `Template fallback` with a reason. The ignored `artifacts/slack-runs/` record includes the original run, model, explanation source, and validated selections. Normal `/resource-demo` and `/resource-demo form` use factual templates without calling Gemini. Neither mode updates Excel or creates assignments.
+
+For a local connection test, you need a valid Gemini API key with access/quota for `GEMINI_MODEL`, the installed Slack bot token, an app-level token with `connections:write`, and the configured workspace ID. Socket Mode must be enabled and the local process must stay running. AWS and Microsoft Graph are not needed for this fictional-data test. Rotating Slack access tokens can expire; refresh or replace them locally when required. Never put credentials in Git or demo records.
 
 ## Future roles
 
