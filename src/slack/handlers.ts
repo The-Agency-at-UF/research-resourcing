@@ -28,13 +28,15 @@ export function registerDemoHandlers(
         return;
       }
       const run = recommend(data.researchers, data.request, data.config);
+      if (action === 'ai') await respond({ response_type: 'ephemeral', text: 'FICTIONAL DATA DEMO\nContacting Gemini. Transient failures receive up to 10 retries against the same model; this can take several minutes. No other model will be used.' });
       const explanation = action === 'ai'
-        ? await (explain?.(run) ?? Promise.resolve({ source: 'template' as const, reason: 'not_configured' as const, message: managerMessage(run) }))
+        ? await (explain?.(run) ?? Promise.resolve({ source: 'template' as const, reason: 'not_configured' as const, message: managerMessage(run), attempts: 0 }))
         : undefined;
       const source = explanation
         ? (explanation.source === 'gemini' ? 'Gemini connected: verified fact selection.' : `Template fallback (${explanation.reason}); Gemini output was not used.`)
         : 'Deterministic scoring and factual templates.';
-      await respond({ response_type: 'ephemeral', text: `FICTIONAL DATA DEMO\n${source}\n\n${explanation?.message ?? managerMessage(run)}` });
+      const attempts = explanation?.attempts !== undefined ? ` Provider requests: ${explanation.attempts}.` : '';
+      await respond({ response_type: 'ephemeral', ...(action === 'ai' ? { replace_original: true } : {}), text: `FICTIONAL DATA DEMO\n${source}${attempts}\n\n${explanation?.message ?? managerMessage(run)}` });
       await recordRun(run, explanation);
     } catch {
       await respond({ response_type: 'ephemeral', text: 'The demo could not complete. Check the local process and Slack interactivity settings, then try again.' });
