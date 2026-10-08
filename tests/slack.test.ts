@@ -6,6 +6,7 @@ import { parseRequestForm, requestModal, resultModal } from '../src/slack/reques
 import { registerDemoHandlers } from '../src/slack/handlers.js';
 import { recommend } from '../src/recommendations/scoring.js';
 import type { RecommendationRun } from '../src/recommendations/models.js';
+import { explainWithGemini, type ExplanationResult } from '../src/integrations/gemini.js';
 
 const load = (path: string) => JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8'));
 const data = { researchers: load('../fixtures/researchers.json'), request: load('../fixtures/request.json'), config: load('../config/scoring.json') };
@@ -78,7 +79,7 @@ test('form bounds keep result text within Slack limits and user text stays liter
 });
 
 // Capture the real Bolt listeners and invoke them with simulated Slack envelopes. No API calls or messages are sent.
-function harness() {
+function harness(explain?: (run: RecommendationRun) => Promise<ExplanationResult>) {
   let command!: Middleware<SlackCommandMiddlewareArgs>;
   let submission!: Middleware<SlackViewMiddlewareArgs<ViewSubmitAction>>;
   const app = {
@@ -86,13 +87,14 @@ function harness() {
     view: (_name: string, listener: typeof submission) => { submission = listener; },
   } as unknown as Pick<App, 'command' | 'view'>;
   const records: RecommendationRun[] = [];
+  const explanations: Array<ExplanationResult | undefined> = [];
   const acknowledgements: unknown[] = [];
   const responses: unknown[] = [];
   const opened: unknown[] = [];
   const order: string[] = [];
-  registerDemoHandlers(app, 'expected-team', data, async run => { order.push('record'); records.push(run); });
+  registerDemoHandlers(app, 'expected-team', data, async (run, explanation) => { order.push('record'); records.push(run); explanations.push(explanation); }, explain);
   return {
-    records, acknowledgements, responses, opened, order,
+    records, explanations, acknowledgements, responses, opened, order,
     command: async (text = '', team = 'expected-team', failOpen = false) => command({
       command: { text, team_id: team, trigger_id: 'test-trigger' },
       ack: async (value: unknown) => { order.push('ack'); acknowledgements.push(value); },
@@ -141,4 +143,42 @@ test('unknown command options and modal API failure return private guidance', as
   assert.equal(h.responses.length, 2);
   assert.match(JSON.stringify(h.responses), /interactivity settings/);
   assert.ok(!JSON.stringify(h.responses).includes('simulated'));
+});
+
+test('AI command acknowledges before generation, privately displays validated facts, and records the original ranking', async () => {
+  const original = recommend(data.researchers, data.request, data.config);
+  const h = harness(async run => {
+    assert.deepEqual(h.order, ['ack']);
+    return explainWithGemini(run, { model: 'test-model', systemInstruction: 'test instructions', generate: async () => ({
+      text: JSON.stringify({ candidates: run.displayed.map(r => ({ researcherId: r.researcherId, factIndexes: [0, 2, 3] })) }),
+    }) });
+  });
+  await h.command('ai');
+  assert.match(JSON.stringify(h.responses), /Gemini connected: verified fact selection/);
+  assert.match(JSON.stringify(h.responses), /ephemeral/);
+  assert.equal(h.explanations[0]?.source, 'gemini');
+  assert.deepEqual(h.records[0], original);
+});
+
+test('AI provider failure is clearly labeled as fallback in Slack', async () => {
+  const h = harness(run => explainWithGemini(run, { model: 'test-model', systemInstruction: 'test instructions',
+    generate: async () => { throw new Error('private provider details'); },
+  }));
+  await h.command('ai');
+  assert.match(JSON.stringify(h.responses), /Template fallback.*model_unavailable/);
+  assert.ok(!JSON.stringify(h.responses).includes('private provider details'));
+  assert.equal(h.explanations[0]?.source, 'template');
+});
+
+test('AI without configuration falls back; ordinary commands and other workspaces never call Gemini', async () => {
+  const unconfigured = harness();
+  await unconfigured.command('ai');
+  assert.match(JSON.stringify(unconfigured.responses), /not_configured/);
+  let calls = 0;
+  const h = harness(async () => { calls++; throw new Error('Must not call'); });
+  await h.command();
+  await h.command('form');
+  await h.command('ai', 'wrong-team');
+  await h.submit();
+  assert.equal(calls, 0);
 });
