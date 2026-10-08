@@ -24,4 +24,4 @@ registerDemoHandlers(app, teamId, data, async run => {
   }
 });
 await app.start();
-console.log('Fictional staffing demo connected. Run /resource-demo or /resource-demo form in the configured workspace.');
+console.log('Staffing Recommendation Beta connected (fictional sample data). Run /resource-demo or /resource-demo form in the configured workspace.');
