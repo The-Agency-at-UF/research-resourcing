@@ -28,4 +28,4 @@ registerDemoHandlers(app, teamId, data, async (run, explanation) => {
   }
 }, run => explainWithGemini(run, { apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL, systemInstruction }));
 await app.start();
-console.log('Fictional staffing demo connected. Run /resource-demo, /resource-demo form, or /resource-demo ai in the configured workspace.');
+console.log('Fictional staffing demo connected. Run /resource-demo or /resource-demo form in the configured workspace.');
