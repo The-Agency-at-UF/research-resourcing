@@ -1,11 +1,11 @@
 {
   "display_information": {
-    "name": "Research Resourcing Dev",
-    "description": "Fictional staffing recommendation demo",
+    "name": "Staffing Recommendation Beta",
+    "description": "Staffing Recommendation Beta",
     "background_color": "#173b4b"
   },
   "features": {
-    "bot_user": { "display_name": "Research Resourcing Dev", "always_online": false },
+    "bot_user": { "display_name": "Staffing Recommendation Beta", "always_online": false },
     "slash_commands": [{ "command": "/resource-demo", "description": "Try fictional staffing recommendations", "usage_hint": "[form]", "should_escape": false }]
   },
   "oauth_config": { "scopes": { "bot": ["commands", "chat:write"] } },
