@@ -8,18 +8,18 @@
 | Excel parsing | ExcelJS | Installed and smoke tested; column mapping pending |
 | Microsoft authentication | MSAL Node and Microsoft Graph | Delegated sign-in diagnostic ready; tenant/app access pending |
 | Ranking | Pure TypeScript weighted scoring | Working: five retained, two or three displayed |
-| Slack | Bolt JS, local Socket Mode | Fixed demo and request form implemented; bot access verified; enable app interactivity and complete manual form verification |
+| Slack | Planned Bolt JS Socket Mode interface | Separate change; not included in this foundation |
 | Compute | AWS Lambda Node.js 24 | Direct-invoke handler and bundle ready; not deployed |
 | Storage | DynamoDB | Optional transaction adapter and undeployed SAM run/result tables |
 | Explanations | Factual templates; optional Gemini later | No model calls in current demo |
 
 Node 24 is supported by [AWS Lambda](https://docs.aws.amazon.com/lambda/latest/dg/lambda-nodejs.html). Use the same major locally and in CI. Roger's system Node was 25.9.0; verification runs with bundled Node 24 without changing that installation.
 
-The source diagram proposes OpenAI. Roger already has Gemini access, so this setup installs the Gemini SDK for future explanations and keeps scoring independent of any model. Agree on the provider substitution with the Dev team before integration. An OpenAI account is not required for this phase.
+The source diagram proposes OpenAI. Roger already has Gemini access, so an optional Gemini adapter will be introduced separately while scoring remains independent of any model. Agree on the provider substitution with the Dev team before integration. An OpenAI account is not required for this phase.
 
 The SAM template includes scoring and recommendation audit storage only. Managers, Researchers, Accounts, Assignments, and ScoringWeights from the complete diagram belong to later data/approval work. The direct handler does not automatically call persistence and has no DynamoDB access policy yet. Connect through a trusted service and add narrowly scoped table permissions when enabling persistence. The CLI already retains the top five locally in `artifacts/recommendation-run.json`.
 
-Socket Mode needs a long-running process. Production Lambda needs an HTTPS Slack receiver with signature verification and prompt acknowledgement, or a separately hosted persistent Socket Mode process. The local Slack script is not the Lambda deployment path. `/resource-demo form` opens the fictional-data request modal; its submission is validated and scored using startup-loaded fixtures before a modal acknowledgement updates the private result. Local audit writes run after acknowledgement. Manager authorization and assignment approvals are not implemented.
+The planned Slack Socket Mode demo needs a long-running process. Production Lambda would need an HTTPS receiver with signature verification and prompt acknowledgement, or a separately hosted persistent Socket Mode process.
 
 ## Fine-tuning
 

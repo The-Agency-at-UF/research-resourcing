@@ -8,7 +8,6 @@ Prepared October 7, 2026. Account membership and application permissions are sep
 |---|---|---|
 | GitHub | RogerMcKenzie authenticated locally; repository admin/push permissions verified | Review implementation branch |
 | Microsoft 365 | Roger confirms UF account; browser admin portal requires sign-in | UF Entra registration and approved Graph authentication |
-| Slack | Bot authentication verified The Agency (`TB67278DB`); local Socket Mode process started October 7 | Enable interactivity for the request form; configure rotating app-token renewal |
 | AWS | Roger supplied access portal; existing SSO config matches it and uses us-east-1; project account pending | Wait for Research Resourcing account and assigned role; then configure a dedicated profile |
 | Gemini | Roger confirms existing API access | Confirm project ownership and approved usage before integrating |
 
@@ -25,22 +24,6 @@ npm run access:check
 ```
 
 The checker reports configuration presence only, never credential values or verified permissions. Real values belong in ignored `.env` locally and the team's secret store for hosted deployments. Scoring needs no credentials.
-
-## Slack development app
-
-1. Sign in to [Your Slack apps](https://api.slack.com/apps) using the account for The Agency.
-2. Check whether the project already has an app. Otherwise choose Create New App > From a manifest, select the workspace, and paste `infra/slack-manifest.json`.
-3. The manifest requests `commands` and `chat:write`, with no channel-history scopes. A workspace administrator may need to approve installation.
-4. In Basic Information > App-Level Tokens, generate a token with `connections:write`. Put it in `.env` as `SLACK_APP_TOKEN`.
-5. Install the app or submit for admin approval. Put the Bot User OAuth Token in `.env` as `SLACK_BOT_TOKEN`. Confirm `SLACK_TEAM_ID` matches your intended workspace; The Agency discovered here is `TB67278DB`.
-6. Enable **Interactivity & Shortcuts** in the existing app's settings and save. Socket Mode handles delivery without a public request URL; the updated manifest also includes `settings.interactivity.is_enabled: true`. Keep the existing token-rotation setting: rotation cannot be disabled once enabled. The manifest omits that setting so it does not request a change.
-7. Run `npm run slack:demo`. Run `/resource-demo` in a test conversation for the original ephemeral result, or `/resource-demo form` to enter fictional request details and see private modal results. Each successful run saves a local record with up to five retained candidates in ignored `artifacts/slack-runs/<run-id>.json`; only two or three appear to the requester. No assignments are made. Fixtures/config load at startup; restart after edits.
-
-Roger's app-level credential has token rotation enabled. The supplied access and refresh tokens are stored locally as `SLACK_APP_TOKEN` and `SLACK_APP_REFRESH_TOKEN`. Rotating access tokens expire after 12 hours; this development script does not automatically refresh them yet. Renewal requires the Slack app client ID/secret and `oauth.v2.access`; each response's new access and refresh tokens must both replace the old pair. Do not print token responses. See [token rotation](https://docs.slack.dev/authentication/using-token-rotation/).
-
-Approvals, production forms, Canvas updates, and live-data notifications are later work. Canvas may require additional scopes and plan support. The local script is a persistent Socket Mode process, not a Lambda HTTP receiver.
-
-Sources: [manifest reference](https://docs.slack.dev/reference/app-manifest/), [Socket Mode](https://docs.slack.dev/apis/events-api/using-socket-mode/), [view submissions](https://docs.slack.dev/tools/bolt-js/concepts/view-submissions/), [commands](https://docs.slack.dev/reference/scopes/commands/), [chat:write](https://docs.slack.dev/reference/scopes/chat.write/).
 
 ## Microsoft 365 and UF app registration
 
@@ -84,7 +67,7 @@ Source: [AWS CLI SSO setup](https://docs.aws.amazon.com/cli/latest/userguide/cli
 
 ## Gemini and model customization
 
-Use the existing Gemini project if the team approves it; confirm billing/quota ownership. `GEMINI_API_KEY` and a deliberately selected `GEMINI_MODEL` are reserved in `.env`. No Gemini calls are currently made. [Gemini keys](https://ai.google.dev/gemini-api/docs/api-key) are associated with a Google Cloud project and belong on the backend.
+Use the existing Gemini project if the team approves it; confirm billing/quota ownership. Gemini configuration and an optional explanation adapter will be introduced separately. No model calls are made by this foundation. [Gemini keys](https://ai.google.dev/gemini-api/docs/api-key) are associated with a Google Cloud project and belong on the backend.
 
 No fine-tuning permissions are needed now. Evaluate model customization only after a measured task failure, sufficient reviewed training examples, and held-out evaluation. See `docs/tech-stack.md`.
 
@@ -93,10 +76,6 @@ No fine-tuning permissions are needed now. Evaluate model customization only aft
 **UF application administrator:**
 
 > We're building a research staffing tool using two maintained UF Microsoft 365 Excel datasets. Could you provide a project-owned Entra development app, tenant/client IDs, and an approved Graph read/write authentication approach? The local diagnostic uses delegated Files.ReadWrite with public-client sign-in; workbook range updates do not support app-only access. We also need guidance on maintained file location and production token handling.
-
-**Slack workspace administrator:**
-
-> Could you confirm that we can create/install Research Resourcing Dev in The Agency using the prepared manifest with commands and chat:write scopes, plus a connections:write app token for local Socket Mode? The initial command uses fictional data. We also need a test conversation and development collaborators for the app.
 
 **AWS project owner:**
 

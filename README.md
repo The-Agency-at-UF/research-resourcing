@@ -31,7 +31,7 @@ These are proposed pilot defaults. Review [scoring assumptions](docs/scoring.md)
 
 ## Connect services
 
-[Access setup](docs/access-setup.md) covers Microsoft app registration, Slack app creation/install, AWS SSO, and optional Gemini access. Draft admin requests are included and have not been sent.
+[Access setup](docs/access-setup.md) covers Microsoft app registration, AWS SSO, and future model access. Draft admin requests are included and have not been sent.
 
 ```bash
 cp .env.example .env
@@ -42,14 +42,9 @@ The checker reports configuration presence only. Once the relevant permissions a
 
 ```bash
 npm run microsoft:check
-npm run slack:demo
 ```
 
-The Microsoft helper verifies delegated sign-in and a OneDrive read. Slack `/resource-demo` returns an ephemeral fictional-data result; `/resource-demo form` opens a request form with private modal results. Enable **Interactivity & Shortcuts** in the Slack app settings (included in the manifest). Application tokens are separate from assistant connector access.
-
-The form accepts a fictional account ID/name, weekly hours per researcher, openings, required/preferred skill tags, minimum experience, career interests, and industry. Each run retains up to five candidates in ignored `artifacts/slack-runs/<run-id>.json`, while the requester sees only the configured two or three. No-match and partial results explain shortages. The local files are demo records, not a production audit store. Fixtures and scoring configuration load at startup; restart the process after changing them.
-
-Try the defaults, then change weekly hours to `40` for a no-match result or openings to `10` for a shortage. Skill tags are exact matches after case/whitespace normalization; use `survey-design`, `data-analysis`, or `interviewing` for these fixtures.
+The Microsoft helper verifies delegated sign-in and a OneDrive read. Slack request handling and optional model explanations will be introduced in separate changes.
 
 ## Structure
 
@@ -58,17 +53,15 @@ config/scoring.json          Pilot scoring policy
 fixtures/                    Fictional input data
 src/recommendations/         Validation, eligibility, ranking, explanations
 src/demo.ts                  Local demo and retained audit output
-src/slack-demo.ts            Socket Mode fictional demo
-src/slack/                   Request form, submission validation, private results
 src/lambda.ts                Direct-invoke scoring handler
 src/integrations/dynamodb.ts Optional audit persistence
 src/scripts/                 Access and sign-in helpers
 tests/                       Business rules and integration checks
-infra/                       Slack manifest, undeployed AWS SAM template
+infra/                       Undeployed AWS SAM template
 ```
 
 ## Scope
 
-This phase implements scoring, a fictional-data Slack request form, and technology/access setup. Live Excel parsing/sync, date-aware capacity, manager authorization, approvals, verified updates to both Excel datasets, operations notifications, and Slack Canvas updates remain future work. Eligibility must be rechecked against fresh data before saving approved assignments; partial Excel updates must be reconciled.
+This phase implements scoring and technology/access scaffolding. Live Excel parsing/sync, date-aware capacity, manager authorization, approvals, verified updates to both Excel datasets, operations notifications, and Slack Canvas updates remain future work. Eligibility must be rechecked against fresh data before saving approved assignments; partial Excel updates must be reconciled.
 
 See [technology notes](docs/tech-stack.md) for working features versus prepared integration pieces. Gemini is optional for future explanations and never determines scores. Fine-tuning is not required.
