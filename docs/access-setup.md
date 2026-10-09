@@ -67,7 +67,7 @@ Source: [AWS CLI SSO setup](https://docs.aws.amazon.com/cli/latest/userguide/cli
 
 ## Gemini and model customization
 
-Use the existing Gemini project if the team approves it; confirm billing/quota ownership. Gemini configuration and an optional explanation adapter will be introduced separately. No model calls are made by this foundation. [Gemini keys](https://ai.google.dev/gemini-api/docs/api-key) are associated with a Google Cloud project and belong on the backend.
+Use the existing Gemini project if the team approves it; confirm billing/quota ownership. Set `GEMINI_API_KEY` in the ignored `.env`; the default `gemini-flash-latest` alias tracks Google's Flash releases. `GEMINI_MODEL` optionally pins a verified version for manual rollback. Run `npm run demo:gemini` for the opt-in CLI or `/resource-demo ai` with the local Slack bot running. Only fictional evidence is sent; the CLI makes no Slack writes and neither mode writes Excel. See [Gemini guardrails](gemini-guardrails.md). [Gemini keys](https://ai.google.dev/gemini-api/docs/api-key) are associated with a Google Cloud project and belong on the backend.
 
 No fine-tuning permissions are needed now. Evaluate model customization only after a measured task failure, sufficient reviewed training examples, and held-out evaluation. See `docs/tech-stack.md`.
 

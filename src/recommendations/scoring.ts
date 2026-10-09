@@ -73,7 +73,7 @@ export function recommend(rawResearchers: unknown[], rawRequest: unknown, rawCon
     if (request.industryId) facts.push(r.industryExperienceIds.includes(request.industryId) ? `experience in ${request.industryId}` : `no listed experience in ${request.industryId}`);
     candidates.push({ researcherId: r.id, name: r.name, rank: 0, score, remainingHours,
       hoursAfterAssignment: remainingHours - request.hoursPerResearcher, matchedSkills, matchedInterests,
-      explanation: facts.join('; ') + '.', breakdown });
+      explanation: facts.join('; ') + '.', facts, breakdown });
   });
 
   // Full precision for sorting; stable ID ordering makes ties repeatable.
