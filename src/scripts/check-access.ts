@@ -1,5 +1,5 @@
 const groups: Record<string, string[]> = {
-  'Gemini explanations (optional)': ['GEMINI_API_KEY', 'GEMINI_MODEL'],
+  'Gemini explanations (optional)': ['GEMINI_API_KEY'],
   'Slack local demo': ['SLACK_TEAM_ID', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN'],
   'Microsoft delegated sign-in': ['MICROSOFT_TENANT_ID', 'MICROSOFT_CLIENT_ID'],
   'Microsoft workbook mapping': ['MICROSOFT_DRIVE_ID', 'MICROSOFT_RESEARCHERS_ITEM_ID', 'MICROSOFT_ACCOUNTS_ITEM_ID'],

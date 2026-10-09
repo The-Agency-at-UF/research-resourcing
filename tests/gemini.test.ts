@@ -81,7 +81,7 @@ test('provider receives bounded displayed evidence without tools or researcher n
   }));
 });
 
-test('transient errors retry the 3.8 base model with fresh deadlines and unchanged input', async () => {
+test('transient errors retry the Flash latest alias with fresh deadlines and unchanged input', async () => {
   for (const status of [408, 429, 500, 503, 504]) {
     const seen: Parameters<GenerateSelection>[0][] = [];
     const waits: number[] = [];
@@ -107,13 +107,33 @@ test('retry exhaustion makes exactly eleven requests to the same model, includin
     let calls = 0; const waits: number[] = [];
     const result = await explainWithGemini(run(), {systemInstruction: instructions,
       waitForRetry: async milliseconds => { waits.push(milliseconds); },
-      generate: async params => { calls++; assert.equal(params.model, 'gemini-3.8-flash'); throw error; },
+      generate: async params => { calls++; assert.equal(params.model, 'gemini-flash-latest'); throw error; },
     });
     assert.equal(calls, GEMINI_MAX_RETRIES + 1); assert.equal(result.attempts, 11);
     assert.equal(waits.length, 10); assert.ok(waits.every(ms => ms <= 2000));
     assert.equal(result.source, 'template'); assert.equal(result.reason, 'model_unavailable');
     assert.equal(result.message, managerMessage(run()));
   }
+});
+
+test('latest alias records the served version while a pinned override stays pinned on retries', async () => {
+  const latest = await explainWithGemini(run(), {systemInstruction: instructions,
+    generate: async params => {
+      assert.equal(params.model, 'gemini-flash-latest');
+      return {text: JSON.stringify(selection()), modelVersion: 'gemini-future-flash'};
+    },
+  });
+  assert.equal(latest.modelVersion, 'gemini-future-flash');
+  let calls = 0;
+  const pinned = await explainWithGemini(run(), {systemInstruction: instructions, model: 'gemini-3.8-flash',
+    waitForRetry: async () => {},
+    generate: async params => {
+      calls++; assert.equal(params.model, 'gemini-3.8-flash');
+      if (calls === 1) throw Object.assign(new Error('busy'), {status:503});
+      return {text: JSON.stringify(selection()), modelVersion: 'gemini-3.8-flash'};
+    },
+  });
+  assert.equal(pinned.attempts, 2); assert.equal(pinned.modelVersion, 'gemini-3.8-flash');
 });
 
 test('authentication, configuration, and invalid output do not trigger retries or model switching', async () => {
