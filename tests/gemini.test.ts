@@ -136,6 +136,16 @@ test('latest alias records the served version while a pinned override stays pinn
   assert.equal(pinned.attempts, 2); assert.equal(pinned.modelVersion, 'gemini-3.8-flash');
 });
 
+test('incompatible alias output retains served-version evidence while rejecting the generated content', async () => {
+  const result = await explainWithGemini(run(), {systemInstruction: instructions,
+    generate: async () => ({text: 'unsupported output', modelVersion: 'gemini-incompatible-flash'}),
+  });
+  assert.equal(result.reason, 'invalid_output');
+  assert.equal(result.modelVersion, 'gemini-incompatible-flash');
+  assert.equal(result.message, managerMessage(run()));
+  assert.ok(!JSON.stringify(result).includes('unsupported output'));
+});
+
 test('authentication, configuration, and invalid output do not trigger retries or model switching', async () => {
   for (const status of [400, 401, 403, 404]) {
     let calls = 0;
