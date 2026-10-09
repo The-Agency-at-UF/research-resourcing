@@ -11,15 +11,16 @@ const selectionSchema = z.object({
   }).strict()).max(3),
 }).strict();
 
-export const GEMINI_BASE_MODEL = 'gemini-3.8-flash';
+export const GEMINI_BASE_MODEL = 'gemini-flash-latest';
 export const GEMINI_TIMEOUT_MS = 30000;
 export const GEMINI_MAX_RETRIES = 10; // Ten retries after the initial request: at most eleven provider calls.
-export type GenerateSelection = (params: GenerateContentParameters) => Promise<{ text?: string }>;
+export type GenerateSelection = (params: GenerateContentParameters) => Promise<{ text?: string; modelVersion?: string }>;
 export interface ExplanationResult {
   source: 'gemini' | 'template';
   reason: 'validated' | 'not_configured' | 'no_candidates' | 'model_unavailable' | 'invalid_output';
   message: string;
   attempts?: number;
+  modelVersion?: string;
   selections?: z.infer<typeof selectionSchema>;
 }
 
@@ -83,7 +84,7 @@ export async function explainWithGemini(run: RecommendationRun, options: {
       httpOptions: {timeout: GEMINI_TIMEOUT_MS, retryOptions: {attempts: 1}},
     },
   };
-  let response: {text?: string} | undefined;
+  let response: {text?: string; modelVersion?: string} | undefined;
   const client = options.generate ? undefined : new GoogleGenAI({apiKey: options.apiKey});
   const generate = options.generate ?? ((input: GenerateContentParameters) => client!.models.generateContent(input));
   const waitForRetry = options.waitForRetry ?? (milliseconds => delay(milliseconds));
@@ -105,6 +106,8 @@ export async function explainWithGemini(run: RecommendationRun, options: {
     const displayed = run.displayed.map((r, index) => ({...r,
       explanation: selections.candidates[index]!.factIndexes.map(i => r.facts[i]!).join('; ') + '.',
     }));
-    return {source: 'gemini', reason: 'validated', selections, attempts, message: managerMessage({...run, displayed})};
+    return {source: 'gemini', reason: 'validated', selections, attempts,
+      ...(response?.modelVersion ? {modelVersion: response.modelVersion} : {}),
+      message: managerMessage({...run, displayed})};
   } catch { return fallback('invalid_output'); }
 }

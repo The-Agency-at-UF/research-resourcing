@@ -15,6 +15,7 @@ await writeFile('artifacts/gemini-demo.json', JSON.stringify({createdAt: new Dat
   model: process.env.GEMINI_MODEL || GEMINI_BASE_MODEL, run, explanation}, null, 2) + '\n', {mode: 0o600});
 console.log('FICTIONAL DATA DEMO');
 console.log(`Model: ${process.env.GEMINI_MODEL || GEMINI_BASE_MODEL}; provider requests: ${explanation.attempts}`);
+if (explanation.modelVersion) console.log(`Served model version: ${explanation.modelVersion}`);
 console.log(`Explanation source: ${explanation.source} (${explanation.reason})`);
 console.log(explanation.message);
 console.log(`Retained ${run.retained.length} candidates. Saved artifacts/gemini-demo.json.`);
