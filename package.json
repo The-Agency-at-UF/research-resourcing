@@ -9,7 +9,8 @@
     "build": "tsc -p tsconfig.build.json",
     "build:lambda": "esbuild src/lambda.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/lambda.mjs",
     "access:check": "node --env-file-if-exists=.env --import tsx src/scripts/check-access.ts",
-    "microsoft:check": "node --env-file=.env --import tsx src/scripts/check-microsoft.ts"
+    "microsoft:check": "node --env-file=.env --import tsx src/scripts/check-microsoft.ts",
+    "slack:demo": "node --env-file=.env --import tsx src/slack-demo.ts"
   },
   "repository": {
     "type": "git",
@@ -28,7 +29,8 @@
     "@aws-sdk/lib-dynamodb": "^3.1147.0",
     "@azure/msal-node": "^7.0.1",
     "exceljs": "^4.4.0",
-    "zod": "^4.6.5"
+    "zod": "^4.6.5",
+    "@slack/bolt": "^5.1.0"
   },
   "devDependencies": {
     "@types/node": "^24.19.1",
