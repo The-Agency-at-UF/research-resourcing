@@ -53,7 +53,10 @@ export async function explainWithGemini(run: RecommendationRun, options: {
   waitForRetry?: (milliseconds: number) => Promise<void>;
 }): Promise<ExplanationResult> {
   let attempts = 0;
-  const fallback = (reason: ExplanationResult['reason']): ExplanationResult => ({source: 'template', reason, message: managerMessage(run), attempts});
+  let modelVersion: string | undefined;
+  const fallback = (reason: ExplanationResult['reason']): ExplanationResult => ({source: 'template', reason, message: managerMessage(run), attempts,
+    ...(modelVersion ? {modelVersion} : {}),
+  });
   if (!run.displayed.length) return fallback('no_candidates');
   if (!options.apiKey && !options.generate) return fallback('not_configured');
   const model = options.model || GEMINI_BASE_MODEL;
@@ -93,6 +96,7 @@ export async function explainWithGemini(run: RecommendationRun, options: {
     try {
       // The same model/payload on every call, with a fresh deadline. Disable SDK retries to avoid multiplying calls.
       response = await generate({...params, config: {...params.config, abortSignal: AbortSignal.timeout(GEMINI_TIMEOUT_MS)}});
+      modelVersion = response.modelVersion;
       break;
     } catch (error) {
       // Do not print provider errors or request details; authentication/configuration failures are not retried.
@@ -107,7 +111,7 @@ export async function explainWithGemini(run: RecommendationRun, options: {
       explanation: selections.candidates[index]!.factIndexes.map(i => r.facts[i]!).join('; ') + '.',
     }));
     return {source: 'gemini', reason: 'validated', selections, attempts,
-      ...(response?.modelVersion ? {modelVersion: response.modelVersion} : {}),
+      ...(modelVersion ? {modelVersion} : {}),
       message: managerMessage({...run, displayed})};
   } catch { return fallback('invalid_output'); }
 }
