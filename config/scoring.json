@@ -1,0 +1,14 @@
+{
+  "version": "pilot-v1",
+  "weights": {
+    "bandwidth": 0.50,
+    "skills": 0.20,
+    "experience": 0.10,
+    "interests": 0.08,
+    "accountLoad": 0.07,
+    "industry": 0.05
+  },
+  "experienceReferenceYears": 3,
+  "retainCount": 5,
+  "displayCount": 3
+}

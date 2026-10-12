@@ -1,0 +1,10 @@
+{
+  "accountId": "sample-no-match",
+  "accountName": "Fictional High Capacity Request",
+  "hoursPerResearcher": 40,
+  "openings": 1,
+  "requiredSkills": ["survey-design"],
+  "preferredSkills": [],
+  "minimumExperienceYears": 0,
+  "careerInterests": []
+}

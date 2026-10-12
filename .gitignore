@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+artifacts/
+data/private/
+*.xlsx
+*.xls
+.DS_Store
+coverage/

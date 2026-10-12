@@ -1,0 +1,50 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Research Resourcing scoring development stack (no public endpoint)
+Resources:
+  ScoringFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs24.x
+      Handler: lambda.handler
+      CodeUri: ../dist/
+      MemorySize: 256
+      Timeout: 15
+      Architectures:
+        - arm64
+      # Direct invocation only. Add authenticated Slack ingress later.
+  RecommendationRuns:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: run_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: run_id
+          KeyType: HASH
+  RecommendationResults:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: run_id
+          AttributeType: S
+        - AttributeName: researcher_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: run_id
+          KeyType: HASH
+        - AttributeName: researcher_id
+          KeyType: RANGE
+Outputs:
+  ScoringFunctionName:
+    Value: !Ref ScoringFunction
+  RecommendationRunsTable:
+    Value: !Ref RecommendationRuns
+  RecommendationResultsTable:
+    Value: !Ref RecommendationResults
