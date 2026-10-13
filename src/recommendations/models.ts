@@ -63,6 +63,7 @@ export interface Recommendation {
   matchedSkills: string[];
   matchedInterests: string[];
   explanation: string;
+  facts: string[];
   breakdown: Breakdown;
 }
 export interface RecommendationRun {

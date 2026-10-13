@@ -44,7 +44,7 @@ The checker reports configuration presence only. Once the relevant permissions a
 npm run microsoft:check
 ```
 
-The Microsoft helper verifies delegated sign-in and a OneDrive read. See the Slack development demo below. Optional model explanations will be introduced separately.
+The Microsoft helper verifies delegated sign-in and a OneDrive read. See the Slack development demo and optional Gemini explanations below.
 
 ## Structure
 
@@ -70,4 +70,8 @@ Try 40 hours/week for a no-match result or 10 openings for a shortage. Fixtures 
 
 This phase implements scoring, a fictional-data Slack demo, and technology/access scaffolding. Live Excel parsing/sync, date-aware capacity, manager authorization, approvals, verified updates to both Excel datasets, operations notifications, and Slack Canvas updates remain future work. Eligibility must be rechecked against fresh data before saving approved assignments; partial Excel updates must be reconciled.
 
-See [technology notes](docs/tech-stack.md) for working features versus prepared integration pieces. Gemini is optional for future explanations and never determines scores. Fine-tuning is not required.
+See [technology notes](docs/tech-stack.md) for working features versus prepared integration pieces. Gemini is optional for explanations and never determines scores. Fine-tuning is not required.
+
+## Optional Gemini explanations
+
+Set `GEMINI_API_KEY` in the ignored `.env` (default model: `gemini-flash-latest`), then run `npm run demo:gemini` or start `npm run slack:demo` and use `/resource-demo ai`. Google's alias tracks the latest Flash release automatically. `GEMINI_MODEL` can override the shared default with a pinned ID for manual rollback; restart the local process after changing it. Transient provider errors receive up to ten retries after the initial request, always using the same configured ID. Gemini selects which verified facts to emphasize; code validates and renders those facts. Scores, ordering, warnings, and manager approval remain under application control. Invalid output or exhausted provider failures use the full factual-template fallback, labeled explicitly in Slack; there is no automatic alternate-model fallback. Served model versions are recorded when Google returns them. See [system instructions and guardrails](docs/gemini-guardrails.md). Only the Slack command sends a private response; neither mode updates Excel.
