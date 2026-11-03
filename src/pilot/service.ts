@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { configSchema, type ScoringConfig } from '../recommendations/models.js';
-import { recommendForPeriod } from './capacity.js';
-import { datedRequestSchema, datedResearcherSchema, PilotError, type Account, type Actor, type Approval,
-  type DatedResearcher, type Manager, type RequestState, type Review, type RunState } from './models.js';
+import { capacityForPeriod, recommendForPeriod } from './capacity.js';
+import { dateSchema, datedRequestSchema, datedResearcherSchema, PilotError, type Account, type Actor, type Approval, type Assignment, type Change,
+  type DatedResearcher, type HqLocation, type ImportReport, type Manager, type RequestState, type Review, type RunState } from './models.js';
+import { computeMetrics } from './reports.js';
 import { ConflictError, type Check, type PilotStore, type Row } from './store.js';
+import { HOURS, inSlots, type CapacityUnits } from './units.js';
 
 const required = <T>(row: Row | undefined): Row<T> => {
   if (!row) throw new PilotError('not_found', 'The pilot record was not found.');
@@ -16,7 +18,8 @@ const id = (value: string) => {
   return value;
 };
 export class PilotService {
-  constructor(public store: PilotStore, public teamId: string, private clock: () => Date = () => new Date()) {}
+  constructor(public store: PilotStore, public teamId: string, private clock: () => Date = () => new Date(), public units: CapacityUnits = HOURS) {}
+  today() { return this.clock().toISOString().slice(0, 10); }
   private managerKey(actor: Actor) {
     if (actor.teamId !== this.teamId || !/^U[A-Z0-9]+$/.test(actor.userId)) throw new PilotError('unauthorized', 'Only configured pilot managers may use this workflow.');
     return `MANAGER#${actor.userId}`;
@@ -42,7 +45,7 @@ export class PilotService {
       if (JSON.stringify(existing.data.request) !== JSON.stringify(request)) throw new PilotError('invalid', 'This request identifier is already in use.');
       return requestId;
     }
-    await this.write([{ key, version: 1, data: { request, filledResearcherIds: [], status: 'awaiting_manager' } satisfies RequestState }],
+    await this.write([{ key, version: 1, data: { request, filledResearcherIds: [], status: 'awaiting_manager', createdAt: this.clock().toISOString() } satisfies RequestState }],
       [check(manager), check(account), { key, version: null }]);
     return requestId;
   }
@@ -51,7 +54,8 @@ export class PilotService {
     const manager = this.validateManager(managerRow), state = required<RequestState>(requestRow), policy = required<ScoringConfig>(configRow);
     this.open(state.data);
     const config = configSchema.parse(policy.data), researchers = await this.store.list<DatedResearcher>('RESEARCHER#');
-    const run = recommendForPeriod(researchers.map(r => r.data), { ...state.data.request, openings: state.data.request.openings - state.data.filledResearcherIds.length }, config);
+    const computed = recommendForPeriod(researchers.map(r => r.data), { ...state.data.request, openings: state.data.request.openings - state.data.filledResearcherIds.length }, config);
+    const run = this.units.kind === 'account-slots' ? inSlots(computed, this.units.maxAccounts) : computed;
     const runId = randomUUID();
     const record: RunState = { run, configVersion: policy.version, researcherVersions: Object.fromEntries(researchers.map(r => [(r.data as DatedResearcher).id, r.version])) };
     await this.write([{ key: `RUN#${runId}`, version: 1, data: record }, next(state, { ...state.data, runId })],
@@ -130,5 +134,72 @@ export class PilotService {
     await this.write([next(state, { ...state.data, status: 'declined' }), { key: `DECLINE#${auditId}`, version: 1,
       data: { requestId, actor, declinedAt: this.clock().toISOString(), filledResearcherIds: state.data.filledResearcherIds } }],
       [check(manager), check(state), { key: `DECLINE#${auditId}`, version: null }]);
+  }
+
+  async importReport(actor: Actor) { await this.authorize(actor); return (await this.store.get<ImportReport>('IMPORT'))?.data; }
+  /** Unauthenticated read for views refreshed after an authorized action; callers must authorize first. */
+  async snapshot() {
+    const [researchers, accounts] = await Promise.all([this.store.list<DatedResearcher>('RESEARCHER#'), this.store.list<Account>('ACCOUNT#')]);
+    return { researchers: researchers.map(r => r.data), accounts: accounts.map(a => a.data) };
+  }
+  async roster(actor: Actor) { await this.authorize(actor); return this.snapshot(); }
+  async activeAssignments(actor: Actor) {
+    await this.authorize(actor);
+    const { researchers, accounts } = await this.snapshot(), names = new Map(accounts.map(a => [a.id, a.name])), today = this.today();
+    return researchers.flatMap(r => r.assignments.map((a, index) => ({ researcherId: r.id, name: r.name, index, accountName: names.get(a.accountId) ?? a.accountId, ...a })))
+      .filter(a => a.status === 'active' && a.endDate >= today)
+      .sort((a, b) => a.name.localeCompare(b.name) || a.startDate.localeCompare(b.startDate));
+  }
+  /**
+   * Cancel or reschedule one assignment, addressed by its position (assignments are only appended, never reordered or removed).
+   * Rescheduling rechecks capacity without the assignment itself. Cancelling an approved assignment reopens its request opening.
+   */
+  async changeAssignment(actor: Actor, researcherId: string, index: number, change: { action: 'cancel' } | { action: 'reschedule'; startDate: string; endDate: string }) {
+    const [managerRow, researcherRow] = await this.store.getMany([this.managerKey(actor), `RESEARCHER#${id(researcherId)}`]);
+    const manager = this.validateManager(managerRow), row = required<DatedResearcher>(researcherRow), current = row.data.assignments[index];
+    if (!Number.isInteger(index) || !current || current.status !== 'active') throw new PilotError('invalid', 'Choose an active assignment.');
+    let updated: Assignment = { ...current, status: 'cancelled' };
+    if (change.action === 'reschedule') {
+      const startDate = dateSchema.safeParse(change.startDate), endDate = dateSchema.safeParse(change.endDate);
+      if (!startDate.success || !endDate.success || startDate.data > endDate.data) throw new PilotError('invalid', 'Choose a valid new date range.');
+      const others = { ...row.data, assignments: row.data.assignments.filter((_, i) => i !== index) };
+      const fit = capacityForPeriod(others, { accountId: current.accountId, hoursPerResearcher: current.hoursPerWeek, startDate: startDate.data, endDate: endDate.data });
+      if (fit.reasons.length) throw new PilotError('invalid', `The new dates do not fit: ${fit.reasons.join('; ')}`);
+      updated = { ...current, startDate: startDate.data, endDate: endDate.data };
+    }
+    const approvalId = current.id.includes('_') ? current.id.slice(0, current.id.indexOf('_')) : '';
+    const approval = /^[a-zA-Z0-9-]{1,100}$/.test(approvalId) ? await this.store.get<Approval>(`APPROVAL#${approvalId}`) : undefined;
+    const requestRow = approval && change.action === 'cancel' ? await this.store.get<RequestState>(`REQUEST#${approval.data.requestId}`) : undefined;
+    const record: Change = { id: randomUUID(), action: change.action, actor, researcherId: row.data.id, assignmentId: current.id, accountId: current.accountId,
+      ...(approval ? { requestId: approval.data.requestId } : {}), before: { startDate: current.startDate, endDate: current.endDate, status: current.status },
+      after: { startDate: updated.startDate, endDate: updated.endDate, status: updated.status }, changedAt: this.clock().toISOString() };
+    const puts: Row[] = [next(row, datedResearcherSchema.parse({ ...row.data, assignments: row.data.assignments.map((a, i) => i === index ? updated : a) })),
+      { key: `CHANGE#${record.id}`, version: 1, data: record }];
+    const checks: Check[] = [check(manager), check(row), { key: `CHANGE#${record.id}`, version: null }];
+    if (requestRow && requestRow.data.filledResearcherIds.includes(row.data.id)) {
+      const filled = requestRow.data.filledResearcherIds.filter(r => r !== row.data.id);
+      puts.push(next(requestRow, { ...requestRow.data, filledResearcherIds: filled, status: requestRow.data.status === 'filled' ? 'partial' : requestRow.data.status }));
+      checks.push(check(requestRow));
+    }
+    await this.write(puts, checks);
+    const account = await this.store.get<Account>(`ACCOUNT#${current.accountId}`);
+    return { change: record, researcherName: row.data.name, accountName: account?.data.name ?? current.accountId, reopenedRequest: puts.length > 2 };
+  }
+  async approvalSummary(actor: Actor, approvalId: string) {
+    await this.authorize(actor);
+    const [reviewRow, approvalRow] = await this.store.getMany([`REVIEW#${id(approvalId)}`, `APPROVAL#${approvalId}`]);
+    const review = required<Review>(reviewRow).data, approval = required<Approval>(approvalRow).data;
+    const state = required<RequestState>(await this.store.get(`REQUEST#${approval.requestId}`)).data;
+    return { approval, request: state.request, status: state.status, names: review.summaries.map(s => s.name) };
+  }
+  /** Returns true once per key, so repeated Slack confirmations do not resend notices. */
+  async claimNotice(key: string) {
+    try { await this.store.commit([{ key: `NOTICE#${id(key)}`, version: 1, data: { at: this.clock().toISOString() } }], [{ key: `NOTICE#${key}`, version: null }]); return true; }
+    catch (error) { if (error instanceof ConflictError) return false; throw error; }
+  }
+  async metrics(actor: Actor) { await this.authorize(actor); return computeMetrics(await this.store.list('')); }
+  hqLocation() { return this.store.get<HqLocation>('HQ'); }
+  async saveHqLocation(location: HqLocation, previous?: Row<HqLocation>) {
+    await this.write([previous ? next(previous, location) : { key: 'HQ', version: 1, data: location }], [previous ? check(previous) : { key: 'HQ', version: null }]);
   }
 }

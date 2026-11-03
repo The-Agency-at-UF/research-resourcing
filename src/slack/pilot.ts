@@ -1,17 +1,39 @@
 import { randomUUID } from 'node:crypto';
 import type { App, types, ViewOutput } from '@slack/bolt';
-import { datedRequestSchema, PilotError, type Account, type Actor, type DatedRequest, type Review, type RunState } from '../pilot/models.js';
+import { datedRequestSchema, PilotError, type Account, type Actor, type DatedRequest, type ImportReport, type Review, type RunState } from '../pilot/models.js';
+import { metricsText, resourcingText } from '../pilot/reports.js';
 import type { PilotService } from '../pilot/service.js';
-import { parseRequestForm, requestModal } from './request-form.js';
+import { amount, HOURS, type CapacityUnits } from '../pilot/units.js';
 
+export interface PilotOptions {
+  /** Slack user or channel IDs told about approved and changed assignments (operations managers). */
+  notify?: string[];
+  /** Channel holding the Resourcing HQ message, edited after each change. */
+  hqChannel?: string;
+  /** False once real workbook data is seeded; changes the label on every screen. */
+  fictional?: boolean;
+  log?: (message: string) => void;
+}
 const text = (value: string) => ({ type: 'plain_text' as const, text: value.slice(0, 2900) });
 const section = (value: string) => ({ type: 'section' as const, text: text(value) });
-const notice = section('FICTIONAL DATA PILOT — test assignments are stored in DynamoDB.');
-const modal = (title: string, blocks: types.ModalView['blocks'], callback?: string, metadata = '{}'): types.ModalView => ({
-  type: 'modal', title: text(title), close: text('Close'), blocks: [notice, ...blocks],
+/** Split long text into section blocks under Slack's per-block limit. */
+const sections = (value: string) => {
+  const out: string[] = []; let current = '';
+  for (const line of value.split('\n')) {
+    if (current && (current + '\n' + line).length > 2900) { out.push(current); current = line; } else current = current ? `${current}\n${line}` : line;
+  }
+  if (current) out.push(current);
+  return out.slice(0, 90).map(section);
+};
+const label = (fictional: boolean) => fictional ? 'FICTIONAL DATA PILOT' : 'STAFFING PILOT';
+const notice = (fictional: boolean) => section(fictional ? 'FICTIONAL DATA PILOT — test assignments are stored in DynamoDB.'
+  : 'STAFFING PILOT — workbook data; assignments are stored in DynamoDB only and are not written back to Excel.');
+const modal = (title: string, blocks: types.ModalView['blocks'], callback?: string, metadata = '{}', fictional = true): types.ModalView => ({
+  type: 'modal', title: text(title), close: text('Close'), blocks: [notice(fictional), ...blocks],
   ...(callback ? { callback_id: callback, private_metadata: metadata, submit: text('Continue') } : {}),
 });
-export const PILOT_REQUEST = 'resource_pilot_request', PILOT_SELECT = 'resource_pilot_select', PILOT_CONFIRM = 'resource_pilot_confirm', PILOT_RESUME = 'resource_pilot_resume';
+export const PILOT_REQUEST = 'resource_pilot_request', PILOT_SELECT = 'resource_pilot_select', PILOT_CONFIRM = 'resource_pilot_confirm',
+  PILOT_RESUME = 'resource_pilot_resume', PILOT_CHANGE = 'resource_pilot_change';
 const metadata = (view: { private_metadata: string }): Record<string, string | number> => {
   try { const value = JSON.parse(view.private_metadata); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); return value; }
   catch { throw new PilotError('invalid', 'Invalid form. Reopen /resource-pilot.'); }
@@ -20,125 +42,234 @@ const field = (values: ViewOutput['state']['values'], name: string) => values[na
 const ref = (meta: Record<string, string | number>, name: string) => {
   const value = meta[name]; if (typeof value !== 'string') throw new PilotError('invalid', 'Invalid form reference. Reopen /resource-pilot.'); return value;
 };
-export function pilotRequestModal(accounts: Account[], requestId: string = randomUUID()): types.ModalView {
-  const base = requestModal().blocks.filter(b => !('block_id' in b) || !['accountId', 'accountName'].includes(b.block_id ?? ''));
+const select = (blockId: string, label: string, options: { text: string; value: string }[], optional = false) => ({
+  type: 'input' as const, block_id: blockId, label: text(label), optional,
+  element: { type: 'static_select' as const, action_id: 'value', options: options.slice(0, 100).map(o => ({ text: text(o.text.slice(0, 75)), value: o.value })) },
+});
+const datepicker = (blockId: string, label: string, optional = false) => ({ type: 'input' as const, block_id: blockId, label: text(label), optional, element: { type: 'datepicker' as const, action_id: 'value' } });
+const plainInput = (blockId: string, label: string, initial: string, max: number, optional = false) => ({
+  type: 'input' as const, block_id: blockId, label: text(label), optional, element: { type: 'plain_text_input' as const, action_id: 'value', initial_value: initial, max_length: max },
+});
+const issueCount = (report?: ImportReport) => (report?.warnings.length ?? 0) + (report?.excluded.length ?? 0);
+
+/** "N strategists or analysts for account X, from date to date." */
+export function pilotRequestModal(accounts: Account[], requestId: string = randomUUID(), issues = 0, fictional = true): types.ModalView {
+  if (!accounts.length) return modal('Pilot staffing request', [section('No accounts are configured in this pilot namespace.')], undefined, '{}', fictional);
   return modal('Pilot staffing request', [
-    { type: 'input', block_id: 'accountId', label: text('Fictional account'), element: { type: 'static_select', action_id: 'value', options: accounts.slice(0, 100).map(a => ({ text: text(a.name), value: a.id })) } },
-    ...['startDate', 'endDate'].map(name => ({ type: 'input' as const, block_id: name, label: text(name === 'startDate' ? 'Start date (inclusive)' : 'End date (inclusive)'), element: { type: 'datepicker' as const, action_id: 'value' } })),
-    ...base.filter(b => b.type === 'input'),
-  ], PILOT_REQUEST, JSON.stringify({ requestId }));
+    ...(issues ? [section(`${issues} workbook import issue(s) may affect these recommendations. Review them with /resource-pilot issues.`)] : []),
+    select('accountId', 'Account', [...accounts].sort((a, b) => a.name.localeCompare(b.name)).map(a => ({ text: a.name, value: a.id }))),
+    select('role', 'Role needed', [{ text: 'Strategist', value: 'strategist' }, { text: 'Analyst', value: 'analyst' }]),
+    plainInput('openings', 'Number of openings', '1', 2),
+    datepicker('startDate', 'Start date (inclusive)'), datepicker('endDate', 'End date (inclusive)'),
+    plainInput('minimumExperienceYears', 'Minimum years since hire', '0', 4, true),
+  ], PILOT_REQUEST, JSON.stringify({ requestId }), fictional);
 }
-export function parsePilotForm(values: ViewOutput['state']['values']) {
-  const accountId = field(values, 'accountId')?.selected_option?.value ?? '';
-  const parsed = parseRequestForm({ ...values, accountId: { value: { type: 'plain_text_input', value: accountId } }, accountName: { value: { type: 'plain_text_input', value: 'Selected fictional account' } } });
-  if (!parsed.ok) return parsed;
-  const dated = datedRequestSchema.safeParse({ ...parsed.request, startDate: field(values, 'startDate')?.selected_date ?? '', endDate: field(values, 'endDate')?.selected_date ?? '' });
-  if (!dated.success) return { ok: false as const, errors: Object.fromEntries(dated.error.issues.map(i => [String(i.path[0]), i.message])) };
-  return { ok: true as const, request: dated.data };
+export function parsePilotForm(values: ViewOutput['state']['values']): { ok: true; request: DatedRequest } | { ok: false; errors: Record<string, string> } {
+  const errors: Record<string, string> = {};
+  const accountId = field(values, 'accountId')?.selected_option?.value ?? '', role = field(values, 'role')?.selected_option?.value ?? '';
+  const openingsText = (field(values, 'openings')?.value ?? '').trim(), experienceText = (field(values, 'minimumExperienceYears')?.value ?? '').trim() || '0';
+  const openings = /^\d+$/.test(openingsText) ? Number(openingsText) : NaN, minimumExperienceYears = /^\d+(?:\.\d+)?$/.test(experienceText) ? Number(experienceText) : NaN;
+  if (!accountId) errors.accountId = 'Choose an account.';
+  if (role !== 'analyst' && role !== 'strategist') errors.role = 'Choose strategist or analyst.';
+  if (!(openings >= 1 && openings <= 20)) errors.openings = 'Enter a whole number from 1 to 20.';
+  if (!Number.isFinite(minimumExperienceYears)) errors.minimumExperienceYears = 'Enter zero or a positive number of years.';
+  if (Object.keys(errors).length) return { ok: false, errors };
+  // One capacity unit per opening: an account slot for workbook data.
+  const dated = datedRequestSchema.safeParse({ accountId, accountName: 'Selected account', hoursPerResearcher: 1, openings, requiredSkills: [role],
+    preferredSkills: [], minimumExperienceYears, careerInterests: [],
+    startDate: field(values, 'startDate')?.selected_date ?? '', endDate: field(values, 'endDate')?.selected_date ?? '' });
+  if (!dated.success) return { ok: false, errors: Object.fromEntries(dated.error.issues.map(i => [String(i.path[0]), i.message])) };
+  return { ok: true, request: dated.data };
 }
-export function selectionModal(requestId: string, runId: string, record: RunState, requestVersion: number) {
+export function selectionModal(requestId: string, runId: string, record: RunState, requestVersion: number, fictional = true) {
   const run = record.run;
-  const blocks: types.ModalView['blocks'] = [section(`${run.request.accountName}\n${run.request.startDate} to ${run.request.endDate}\n${run.request.hoursPerResearcher} hours/week each; ${run.request.openings} openings remain.\nRequest: ${requestId}`),
+  const blocks: types.ModalView['blocks'] = [section(`${run.request.accountName}\n${run.request.startDate} to ${run.request.endDate}\nRole: ${run.request.requiredSkills.join(', ')}; ${run.request.openings} opening(s) remain.\nRequest: ${requestId}`),
     ...run.displayed.map(r => section(`${r.rank}. ${r.name} — ${r.score.toFixed(1)}\n${r.explanation}`)), ...run.warnings.map(section)];
-  if (run.excluded.length) blocks.push(section(`Exclusions:\n${run.excluded.map(e => `${e.researcherId}: ${e.reasons.join('; ')}`).join('\n')}`));
+  if (run.excluded.length) blocks.push(...sections(`Exclusions:\n${run.excluded.map(e => `${e.researcherId}: ${e.reasons.join('; ')}`).join('\n')}`));
   blocks.push({ type: 'input', block_id: 'decision', label: text('Decision'), element: { type: 'static_select', action_id: 'value', initial_option: { text: text('Review candidate selection'), value: 'approve' }, options: [
     { text: text('Review candidate selection'), value: 'approve' }, { text: text('Decline remaining openings'), value: 'decline' },
   ] } });
   if (run.retained.length) blocks.push({ type: 'input', block_id: 'candidates', optional: true, label: text('Select from the retained shortlist'), element: {
     type: 'multi_static_select', action_id: 'value', max_selected_items: Math.min(5, run.request.openings, run.retained.length),
-    options: run.retained.map(r => ({ text: text(`${r.rank}. ${r.name} — ${r.score.toFixed(1)}`), value: r.researcherId })),
+    options: run.retained.map(r => ({ text: text(`${r.rank}. ${r.name} — ${r.score.toFixed(1)}`.slice(0, 75)), value: r.researcherId })),
   } });
-  return modal('Pilot recommendations', blocks, PILOT_SELECT, JSON.stringify({ requestId, runId, requestVersion }));
+  return modal('Pilot recommendations', blocks, PILOT_SELECT, JSON.stringify({ requestId, runId, requestVersion }), fictional);
 }
-export function confirmationModal(approvalId: string, review: Review, request: DatedRequest) {
-  return { ...modal('Confirm test assignments', [section(`${request.accountName}\n${request.startDate} to ${request.endDate}, inclusive\n${request.hoursPerResearcher} hours/week per researcher`),
-    ...review.summaries.map(s => section(`${s.name}\nAt least ${s.hoursAfterAssignment} hours/week remain after assignment.`)),
+export function confirmationModal(approvalId: string, review: Review, request: DatedRequest, units: CapacityUnits = HOURS, fictional = true) {
+  return { ...modal('Confirm test assignments', [section(`${request.accountName}\n${request.startDate} to ${request.endDate}, inclusive\nRole: ${request.requiredSkills.join(', ')}`),
+    ...review.summaries.map(s => section(`${s.name}\nAt least ${amount(units, s.hoursAfterAssignment)} remain after assignment.`)),
     section('Availability will be checked again when you confirm. Nothing has been reserved yet.'),
-  ], PILOT_CONFIRM, JSON.stringify({ approvalId, requestId: review.requestId })), submit: text('Approve test batch') };
+  ], PILOT_CONFIRM, JSON.stringify({ approvalId, requestId: review.requestId }), fictional), submit: text('Approve batch') };
+}
+type AssignmentOption = Awaited<ReturnType<PilotService['activeAssignments']>>[number];
+export function changeModal(assignments: AssignmentOption[], fictional = true) {
+  if (!assignments.length) return modal('Assignments', [section('No active or upcoming assignments.')], undefined, '{}', fictional);
+  return modal('Change an assignment', [
+    select('assignment', 'Assignment', assignments.map(a => ({ text: `${a.name} — ${a.accountName} (${a.startDate}–${a.endDate})`, value: `${a.researcherId}#${a.index}` }))),
+    select('change', 'Change', [{ text: 'Cancel this assignment', value: 'cancel' }, { text: 'Change its dates', value: 'reschedule' }]),
+    datepicker('newStart', 'New start date (when changing dates)', true), datepicker('newEnd', 'New end date (when changing dates)', true),
+    section('Cancelling an approved assignment reopens that opening on its request. New dates are checked against capacity first.'),
+  ], PILOT_CHANGE, '{}', fictional);
+}
+export function issuesModal(report: ImportReport | undefined, fictional = true) {
+  if (!report || !issueCount(report)) return modal('Workbook import issues', [section(report ? `No issues recorded for ${report.source} (imported ${report.importedAt}).` : 'No workbook import is recorded in this pilot namespace.')], undefined, '{}', fictional);
+  return modal('Workbook import issues', sections([
+    `Source: ${report.source}, imported ${report.importedAt}. Correct the workbook and re-import into a new namespace to clear these.`,
+    report.excluded.length ? `\nExcluded from recommendations (${report.excluded.length}):\n${report.excluded.map(e => `- ${e.researcherId}: ${e.reasons.join('; ')}`).join('\n')}` : '',
+    report.warnings.length ? `\nWarnings (${report.warnings.length}):\n${report.warnings.map(w => `- ${w}`).join('\n')}` : '',
+  ].filter(Boolean).join('\n')), undefined, '{}', fictional);
+}
+const help = ['/resource-pilot — new staffing request (role, openings, dates)', '/resource-pilot list — resume a saved request', '/resource-pilot <request-id> — open a request',
+  '/resource-pilot assignments — cancel or change an assignment', '/resource-pilot hq — current resourcing view', '/resource-pilot issues — workbook import problems',
+  '/resource-pilot metrics — pilot measures'].join('\n');
+
+/** The slow half of a pilot interaction: runs inline under Socket Mode, or in the worker Lambda when hosted. Plain JSON. */
+export type PilotJob =
+  | { kind: 'command'; teamId: string; userId: string; text: string; viewId: string }
+  | { kind: 'view'; callback: string; teamId: string; userId: string; viewId: string; privateMetadata: string; values: ViewOutput['state']['values'] };
+type SlackCalls = Pick<App['client'], 'views' | 'chat'>;
+const loading: Record<string, string> = { [PILOT_REQUEST]: 'Loading dated recommendations…', [PILOT_RESUME]: 'Loading saved request…',
+  [PILOT_SELECT]: 'Checking current availability…', [PILOT_CONFIRM]: 'Rechecking and saving your decision…', [PILOT_CHANGE]: 'Checking and saving the change…' };
+function changeErrors(values: ViewOutput['state']['values']) {
+  const errors: Record<string, string> = {}, kind = field(values, 'change')?.selected_option?.value;
+  if (!/^(.+)#(\d+)$/.test(field(values, 'assignment')?.selected_option?.value ?? '')) errors.assignment = 'Choose an assignment.';
+  if (kind !== 'cancel' && kind !== 'reschedule') errors.change = 'Choose what to change.';
+  if (kind === 'reschedule' && !field(values, 'newStart')?.selected_date) errors.newStart = 'Choose the new start date.';
+  if (kind === 'reschedule' && !field(values, 'newEnd')?.selected_date) errors.newEnd = 'Choose the new end date.';
+  return Object.keys(errors).length ? errors : undefined;
 }
 
-export function registerPilotHandlers(app: Pick<App, 'command' | 'view'>, service?: PilotService) {
-  const needed = () => { if (!service) throw new PilotError('invalid', 'The DynamoDB pilot is not configured.'); return service; };
-  const failure = (error: unknown, requestId?: string) => modal('Pilot action stopped', [section(error instanceof PilotError ? error.message : 'The action could not complete. Retry or check the local process. No success is being reported.'),
-    ...(requestId ? [section(`Run /resource-pilot ${requestId} to reload this request. A repeated confirmation is safe if its first response was lost.`)] : [])]);
-  const actor = (teamId: string | undefined, userId: string): Actor => ({ teamId: teamId ?? '', userId });
-  const showRecommendations = async (who: Actor, requestId: string) => {
-    const s = needed(), state = await s.request(who, requestId);
-    if (state.data.status === 'filled' || state.data.status === 'declined') return modal('Saved pilot request', [section(`${state.data.request.accountName}\n${state.data.request.startDate} to ${state.data.request.endDate}\nStatus: ${state.data.status}\nApproved researchers: ${state.data.filledResearcherIds.join(', ') || 'None'}\nRequest: ${requestId}`)]);
-    const result = await s.recommendations(who, requestId), current = await s.request(who, requestId);
-    return selectionModal(requestId, result.runId, result, current.version);
+/** Register fast handlers: acknowledge within Slack's deadline, show a loading view, then hand the rest to `dispatch` (inline by default). */
+export function registerPilotHandlers(app: Pick<App, 'command' | 'view'>, service?: PilotService, options: PilotOptions = {}, dispatch?: (job: PilotJob) => Promise<void>) {
+  const fictional = options.fictional ?? true, log = options.log ?? ((message: string) => console.error(message));
+  const send = async (client: SlackCalls, job: PilotJob) => {
+    try { await (dispatch ?? (j => runPilotJob(j, client, service, options)))(job); }
+    catch (error) {
+      log(`Pilot job dispatch failed: ${(error as Error).message}`);
+      await client.views.update({ view_id: job.viewId, view: modal('Pilot action stopped', [section('The action could not be started. Nothing was saved. Try again shortly.')], undefined, '{}', fictional) });
+    }
   };
   app.command('/resource-pilot', async ({ command, ack, client }) => {
     await ack();
-    const opened = await client.views.open({ trigger_id: command.trigger_id, view: modal('Staffing pilot', [section('Loading pilot access…')]) });
-    if (!opened.view?.id) return;
-    let view: types.ModalView;
-    try {
-      const s = needed(), who = actor(command.team_id, command.user_id); await s.authorize(who);
-      const action = command.text.trim();
-      if (!action) view = pilotRequestModal(await s.accounts(who));
-      else if (action === 'list') {
-        const requests = await s.requests(who);
-        view = requests.length ? modal('Resume pilot request', [{ type: 'input', block_id: 'request', label: text('Request'), element: { type: 'static_select', action_id: 'value', options: requests.slice(-100).map(r => ({
-          text: text(`${r.data.request.accountName} (${r.data.status}) ${r.key.slice(8, 16)}`), value: r.key.slice(8),
-        })) } }], PILOT_RESUME) : modal('Pilot requests', [section('No requests yet. Run /resource-pilot to create one.')]);
-      } else view = await showRecommendations(who, action);
-    } catch (error) { view = failure(error); }
-    await client.views.update({ view_id: opened.view.id, view });
+    const opened = await client.views.open({ trigger_id: command.trigger_id, view: modal('Staffing pilot', [section('Loading pilot access…')], undefined, '{}', fictional) });
+    if (opened.view?.id) await send(client, { kind: 'command', teamId: command.team_id, userId: command.user_id, text: command.text, viewId: opened.view.id });
   });
-  app.view(PILOT_REQUEST, async ({ body, view, ack, client }) => {
-    const parsed = parsePilotForm(view.state.values);
-    if (!parsed.ok) { await ack({ response_action: 'errors', errors: parsed.errors }); return; }
-    await ack({ response_action: 'update', view: modal('Staffing pilot', [section('Loading dated recommendations…')]) });
-    let result: types.ModalView;
+  const validators: Record<string, (values: ViewOutput['state']['values']) => Record<string, string> | undefined> = {
+    [PILOT_REQUEST]: values => { const parsed = parsePilotForm(values); return parsed.ok ? undefined : parsed.errors; }, [PILOT_CHANGE]: changeErrors,
+  };
+  for (const callback of [PILOT_REQUEST, PILOT_RESUME, PILOT_SELECT, PILOT_CONFIRM, PILOT_CHANGE]) {
+    app.view(callback, async ({ body, view: submitted, ack, client }) => {
+      const errors = validators[callback]?.(submitted.state.values);
+      if (errors) { await ack({ response_action: 'errors', errors }); return; }
+      await ack({ response_action: 'update', view: modal('Staffing pilot', [section(loading[callback]!)], undefined, '{}', fictional) });
+      await send(client, { kind: 'view', callback, teamId: body.team?.id ?? '', userId: body.user.id, viewId: submitted.id, privateMetadata: submitted.private_metadata, values: submitted.state.values });
+    });
+  }
+}
+
+/** Do the database work for one interaction, replace the loading view with the result, then send notices and refresh HQ. */
+export async function runPilotJob(job: PilotJob, client: SlackCalls, service: PilotService | undefined, options: PilotOptions = {}) {
+  const fictional = options.fictional ?? true, log = options.log ?? ((message: string) => console.error(message));
+  const view = (title: string, blocks: types.ModalView['blocks'], callback?: string, meta = '{}') => modal(title, blocks, callback, meta, fictional);
+  const needed = () => { if (!service) throw new PilotError('invalid', 'The DynamoDB pilot is not configured.'); return service; };
+  const failure = (error: unknown, requestId?: string) => view('Pilot action stopped', [section(error instanceof PilotError ? error.message : 'The action could not complete. Retry shortly. No success is being reported.'),
+    ...(requestId ? [section(`Run /resource-pilot ${requestId} to reload this request. A repeated confirmation is safe if its first response was lost.`)] : [])]);
+  const who: Actor = { teamId: job.teamId, userId: job.userId };
+  // Notices and the HQ message follow a committed change; their failures are logged and never undo or misreport the change.
+  const announce = async (message: string) => {
+    for (const target of options.notify ?? []) {
+      try { await client.chat.postMessage({ channel: target, text: message }); }
+      catch (error) { log(`Pilot notice to ${target} failed: ${(error as { data?: { error?: string } }).data?.error ?? (error as Error).message}`); }
+    }
+  };
+  const refreshHq = async () => {
+    if (!options.hqChannel || !service) return;
     try {
-      const s = needed(), who = actor(body.team?.id, body.user.id), requestId = ref(metadata(view), 'requestId');
-      const account = (await s.accounts(who)).find(a => a.id === parsed.request.accountId);
-      if (!account) throw new PilotError('invalid', 'Choose a configured fictional account.');
-      await s.createRequest(who, { ...parsed.request, accountName: account.name }, requestId);
-      result = await showRecommendations(who, requestId);
-    } catch (error) { result = failure(error); }
-    await client.views.update({ view_id: view.id, view: result });
-  });
-  app.view(PILOT_RESUME, async ({ body, view, ack, client }) => {
-    await ack({ response_action: 'update', view: modal('Staffing pilot', [section('Loading saved request…')]) });
-    let result: types.ModalView;
-    try { result = await showRecommendations(actor(body.team?.id, body.user.id), field(view.state.values, 'request')?.selected_option?.value ?? ''); }
-    catch (error) { result = failure(error); }
-    await client.views.update({ view_id: view.id, view: result });
-  });
-  app.view(PILOT_SELECT, async ({ body, view, ack, client }) => {
-    await ack({ response_action: 'update', view: modal('Staffing pilot', [section('Checking current availability…')]) });
-    let result: types.ModalView, requestId: string | undefined;
-    try {
-      const s = needed(), who = actor(body.team?.id, body.user.id), meta = metadata(view); requestId = ref(meta, 'requestId');
+      const message = resourcingText(await service.snapshot(), service.today(), service.units, label(fictional)), row = await service.hqLocation();
+      if (row?.data.channel === options.hqChannel) {
+        try { await client.chat.update({ channel: row.data.channel, ts: row.data.ts, text: message }); return; }
+        catch (error) { if ((error as { data?: { error?: string } }).data?.error !== 'message_not_found') throw error; }
+      }
+      const posted = await client.chat.postMessage({ channel: options.hqChannel, text: message });
+      if (posted.ts) await service.saveHqLocation({ channel: options.hqChannel, ts: posted.ts }, row);
+    } catch (error) { log(`Resourcing HQ update failed: ${(error as { data?: { error?: string } }).data?.error ?? (error as Error).message}`); }
+  };
+  const showRecommendations = async (requestId: string) => {
+    const s = needed(), state = await s.request(who, requestId);
+    if (state.data.status === 'filled' || state.data.status === 'declined') return view('Saved pilot request', [section(`${state.data.request.accountName}\n${state.data.request.startDate} to ${state.data.request.endDate}\nStatus: ${state.data.status}\nApproved researchers: ${state.data.filledResearcherIds.join(', ') || 'None'}\nRequest: ${requestId}`)]);
+    const result = await s.recommendations(who, requestId), current = await s.request(who, requestId);
+    return selectionModal(requestId, result.runId, result, current.version, fictional);
+  };
+  let result: types.ModalView, requestId: string | undefined, after: (() => Promise<void>) | undefined;
+  try {
+    const s = needed();
+    if (job.kind === 'command') {
       await s.authorize(who);
-      if (field(view.state.values, 'decision')?.selected_option?.value === 'decline') {
-        const state = await s.request(who, requestId);
-        if (state.version !== meta.requestVersion) throw new PilotError('stale', 'The request changed. Reload it before declining.');
-        result = { ...modal('Confirm decline', [section(`Decline the remaining openings for ${state.data.request.accountName}? Existing approved assignments will stay in place.`)], PILOT_CONFIRM,
-          JSON.stringify({ requestId, declineVersion: state.version })), submit: text('Decline openings') };
-      } else {
-        const selected = field(view.state.values, 'candidates')?.selected_options?.map(o => o.value) ?? [];
-        const prepared = await s.prepareApproval(who, requestId, ref(meta, 'runId'), selected);
-        result = confirmationModal(prepared.approvalId, prepared.review, prepared.request);
-      }
-    } catch (error) { result = failure(error, error instanceof PilotError && error.code === 'unauthorized' ? undefined : requestId); }
-    await client.views.update({ view_id: view.id, view: result });
-  });
-  app.view(PILOT_CONFIRM, async ({ body, view, ack, client }) => {
-    await ack({ response_action: 'update', view: modal('Staffing pilot', [section('Rechecking and saving your decision…')]) });
-    let result: types.ModalView, requestId: string | undefined;
-    try {
-      const s = needed(), who = actor(body.team?.id, body.user.id), meta = metadata(view); requestId = ref(meta, 'requestId');
-      if (typeof meta.declineVersion === 'number') {
-        await s.decline(who, requestId, meta.declineVersion);
-        result = modal('Pilot request declined', [section('Remaining openings declined. Existing approved assignments are unchanged.')]);
-      } else {
-        const approval = await s.approve(who, ref(meta, 'approvalId'));
-        result = modal('Test assignments saved', [section(`Test assignments saved in DynamoDB.\nResearchers: ${approval.researcherIds.join(', ')}\nApproval: ${approval.id}\nRequest: ${approval.requestId}`), section(`Run /resource-pilot ${approval.requestId} to continue, or /resource-pilot list to inspect saved requests.`)]);
-      }
-    } catch (error) { result = failure(error, error instanceof PilotError && error.code === 'unauthorized' ? undefined : requestId); }
-    await client.views.update({ view_id: view.id, view: result });
-  });
+      const action = job.text.trim(), keyword = action.toLowerCase();
+      if (!action) result = pilotRequestModal(await s.accounts(who), undefined, issueCount(await s.importReport(who)), fictional);
+      else if (keyword === 'help') result = view('Staffing pilot help', sections(help));
+      else if (keyword === 'hq') result = view('Resourcing HQ', sections(resourcingText(await s.roster(who), s.today(), s.units, label(fictional))));
+      else if (keyword === 'issues') result = issuesModal(await s.importReport(who), fictional);
+      else if (keyword === 'metrics') result = view('Pilot metrics', sections(metricsText(await s.metrics(who), s.today())));
+      else if (keyword === 'assignments') result = changeModal(await s.activeAssignments(who), fictional);
+      else if (keyword === 'list') {
+        const requests = await s.requests(who);
+        result = requests.length ? view('Resume pilot request', [{ type: 'input', block_id: 'request', label: text('Request'), element: { type: 'static_select', action_id: 'value', options: requests.slice(-100).map(r => ({
+          text: text(`${r.data.request.accountName} (${r.data.status}) ${r.key.slice(8, 16)}`.slice(0, 75)), value: r.key.slice(8),
+        })) } }], PILOT_RESUME) : view('Pilot requests', [section('No requests yet. Run /resource-pilot to create one.')]);
+      } else result = await showRecommendations(action);
+    } else {
+      const meta = () => metadata({ private_metadata: job.privateMetadata }), values = job.values;
+      if (job.callback === PILOT_REQUEST) {
+        const parsed = parsePilotForm(values);
+        if (!parsed.ok) throw new PilotError('invalid', 'The request form was incomplete. Reopen /resource-pilot.');
+        requestId = ref(meta(), 'requestId');
+        const account = (await s.accounts(who)).find(a => a.id === parsed.request.accountId);
+        if (!account) throw new PilotError('invalid', 'Choose a configured account.');
+        await s.createRequest(who, { ...parsed.request, accountName: account.name }, requestId);
+        result = await showRecommendations(requestId);
+      } else if (job.callback === PILOT_RESUME) {
+        result = await showRecommendations(field(values, 'request')?.selected_option?.value ?? '');
+      } else if (job.callback === PILOT_SELECT) {
+        const m = meta(); requestId = ref(m, 'requestId');
+        await s.authorize(who);
+        if (field(values, 'decision')?.selected_option?.value === 'decline') {
+          const state = await s.request(who, requestId);
+          if (state.version !== m.requestVersion) throw new PilotError('stale', 'The request changed. Reload it before declining.');
+          result = { ...view('Confirm decline', [section(`Decline the remaining openings for ${state.data.request.accountName}? Existing approved assignments will stay in place.`)], PILOT_CONFIRM,
+            JSON.stringify({ requestId, declineVersion: state.version })), submit: text('Decline openings') };
+        } else {
+          const prepared = await s.prepareApproval(who, requestId, ref(m, 'runId'), field(values, 'candidates')?.selected_options?.map(o => o.value) ?? []);
+          result = confirmationModal(prepared.approvalId, prepared.review, prepared.request, s.units, fictional);
+        }
+      } else if (job.callback === PILOT_CONFIRM) {
+        const m = meta(); requestId = ref(m, 'requestId');
+        if (typeof m.declineVersion === 'number') {
+          await s.decline(who, requestId, m.declineVersion);
+          result = view('Pilot request declined', [section('Remaining openings declined. Existing approved assignments are unchanged.')]);
+        } else {
+          const approval = await s.approve(who, ref(m, 'approvalId'));
+          result = view('Assignments saved', [section(`${fictional ? 'Test assignments' : 'Assignments'} saved in DynamoDB.\nResearchers: ${approval.researcherIds.join(', ')}\nApproval: ${approval.id}\nRequest: ${approval.requestId}`), section(`Run /resource-pilot ${approval.requestId} to continue, or /resource-pilot list to inspect saved requests.`)]);
+          after = async () => {
+            if (await s.claimNotice(approval.id)) {
+              const summary = await s.approvalSummary(who, approval.id);
+              await announce(`${label(fictional)}: ${summary.request.accountName} — ${summary.names.join(', ')} approved as ${summary.request.requiredSkills.join(', ')} for ${summary.request.startDate} to ${summary.request.endDate} by <@${who.userId}>. Request ${approval.requestId} is ${summary.status}.`);
+            }
+            await refreshHq();
+          };
+        }
+      } else if (job.callback === PILOT_CHANGE) {
+        if (changeErrors(values)) throw new PilotError('invalid', 'The change form was incomplete. Reopen /resource-pilot assignments.');
+        const selected = /^(.+)#(\d+)$/.exec(field(values, 'assignment')!.selected_option!.value)!, kind = field(values, 'change')?.selected_option?.value;
+        const done = await s.changeAssignment(who, selected[1]!, Number(selected[2]), kind === 'cancel' ? { action: 'cancel' }
+          : { action: 'reschedule', startDate: field(values, 'newStart')!.selected_date!, endDate: field(values, 'newEnd')!.selected_date! });
+        const what = done.change.action === 'cancel' ? `cancelled (was ${done.change.before.startDate} to ${done.change.before.endDate})`
+          : `moved from ${done.change.before.startDate}–${done.change.before.endDate} to ${done.change.after.startDate}–${done.change.after.endDate}`;
+        result = view('Assignment updated', [section(`${done.researcherName} on ${done.accountName}: ${what}.${done.reopenedRequest ? `\nThe opening on request ${done.change.requestId} is open again.` : ''}`)]);
+        after = async () => { await announce(`${label(fictional)}: ${done.researcherName} on ${done.accountName} ${what} by <@${who.userId}>.`); await refreshHq(); };
+      } else throw new PilotError('invalid', 'Unknown pilot form. Reopen /resource-pilot.');
+    }
+  } catch (error) { result = failure(error, error instanceof PilotError && error.code === 'unauthorized' ? undefined : requestId); }
+  await client.views.update({ view_id: job.viewId, view: result });
+  await after?.().catch(error => log(`Post-action follow-up failed: ${(error as Error).message}`));
 }

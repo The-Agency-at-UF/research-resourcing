@@ -16,3 +16,14 @@ rule scoped_runtime_policy {
   Resources.PilotClientRole.Properties.Policies[*].PolicyDocument.Statement[*].Resource.'Fn::GetAtt' == 'WorkflowState.Arn'
   Resources.PilotClientRole.Properties.AssumeRolePolicyDocument.Statement[*].Principal.AWS.Ref == 'PilotOperatorArn'
 }
+rule slack_ingress_is_receiver_only {
+  Resources.SlackWorkerFunction.Properties.FunctionUrlConfig !exists
+  Resources.SlackWorkerFunction.Properties.Events !exists
+  Resources.SlackWorkerFunction.Properties.EventInvokeConfig.MaximumRetryAttempts == 0
+  Resources.SlackReceiverFunction.Properties.Environment.Variables.WORKFLOW_TABLE !exists
+}
+rule slack_secrets_stay_out_of_environment {
+  Resources.SlackReceiverFunction.Properties.Environment.Variables.SLACK_BOT_TOKEN !exists
+  Resources.SlackReceiverFunction.Properties.Environment.Variables.SLACK_SIGNING_SECRET !exists
+  Resources.SlackWorkerFunction.Properties.Environment.Variables.SLACK_BOT_TOKEN !exists
+}

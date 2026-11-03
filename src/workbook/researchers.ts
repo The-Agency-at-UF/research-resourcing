@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { ScoringConfig } from '../recommendations/models.js';
 import { recommendForPeriod } from '../pilot/capacity.js';
 import { dateSchema, datedResearcherSchema, type DatedResearcher, type DatedRun } from '../pilot/models.js';
+import { inSlots } from '../pilot/units.js';
 import { clean, slug, type GridMember, type ParsedWorkbook, type RosterMember } from './parse.js';
 
 export const workbookSettingsSchema = z.object({
@@ -79,26 +80,17 @@ export function workbookResearchers(parsed: ParsedWorkbook, settings: WorkbookSe
   return { researchers, excluded, warnings, managers };
 }
 
-const units = (value: string) => value.replace(/hours\/week/g, 'account slots').replace(/Missing essential skills: (\w+)/, 'Role is not $1');
-
 /** Rank workbook researchers for a role-based request, reporting capacity in account slots. */
 export function recommendFromWorkbook(parsed: ParsedWorkbook, rawRequest: WorkbookRequest, config: ScoringConfig, settings: WorkbookSettings, aliases?: Record<string, string>) {
   const request = workbookRequestSchema.parse(rawRequest);
   const { researchers, excluded, warnings, managers } = workbookResearchers(parsed, settings, request.startDate, aliases);
   const accountId = slug(request.accountName);
   if (!parsed.accounts.has(accountId)) warnings.push(`"${request.accountName}" is not a column on the grid; existing assignments to it cannot be detected`);
-  const run = recommendForPeriod(researchers, { accountId, accountName: request.accountName, hoursPerResearcher: 1, openings: request.openings,
+  const run = inSlots(recommendForPeriod(researchers, { accountId, accountName: request.accountName, hoursPerResearcher: 1, openings: request.openings,
     requiredSkills: [request.role], preferredSkills: [], minimumExperienceYears: request.minimumExperienceYears, careerInterests: [],
-    startDate: request.startDate, endDate: request.endDate }, config);
-  const retained = run.retained.map(r => {
-    const facts = [`${r.remainingHours} of ${settings.maxAccounts} account slots free throughout ${request.startDate} to ${request.endDate}`,
-      `${r.hoursAfterAssignment} slot${r.hoursAfterAssignment === 1 ? '' : 's'} would remain after this account`, `role: ${request.role}`,
-      ...r.facts.slice(3).map(f => f.replace('years of experience', 'years since hire'))];
-    return { ...r, facts, explanation: facts.join('; ') + '.' };
-  });
+    startDate: request.startDate, endDate: request.endDate }, config), settings.maxAccounts);
   const runWarnings = excluded.length ? [`${excluded.length} workbook record(s) excluded for missing or conflicting data; review the import warnings.`, ...run.warnings] : run.warnings;
-  return { run: { ...run, warnings: runWarnings, retained, displayed: retained.slice(0, config.displayCount),
-    excluded: [...excluded, ...run.excluded.map(e => ({ ...e, reasons: e.reasons.map(units) }))] }, warnings, managers };
+  return { run: { ...run, warnings: runWarnings, excluded: [...excluded, ...run.excluded] }, warnings, managers };
 }
 
 export function workbookMessage(result: ReturnType<typeof recommendFromWorkbook>) {

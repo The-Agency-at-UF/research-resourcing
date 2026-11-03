@@ -15,7 +15,9 @@
     "slack:pilot": "node --env-file=.env.pilot --import tsx src/slack-demo.ts",
     "pilot:seed": "node --env-file=.env.pilot --import tsx src/scripts/seed-pilot.ts",
     "test:pilot:aws": "node --env-file=.env.pilot --import tsx --test tests/pilot-aws.integration.ts",
-    "workbook": "tsx src/workbook-demo.ts"
+    "workbook": "tsx src/workbook-demo.ts",
+    "pilot:metrics": "node --env-file=.env.pilot --import tsx src/scripts/pilot-metrics.ts",
+    "build:hosted": "node scripts/build-hosted.mjs"
   },
   "repository": {
     "type": "git",
@@ -31,12 +33,14 @@
   "homepage": "https://github.com/The-Agency-at-UF/research-resourcing#readme",
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1147.0",
+    "@aws-sdk/client-lambda": "^3.1161.0",
+    "@aws-sdk/client-ssm": "^3.1161.0",
     "@aws-sdk/lib-dynamodb": "^3.1147.0",
     "@azure/msal-node": "^7.0.1",
-    "exceljs": "^4.4.0",
-    "zod": "^4.6.5",
     "@google/genai": "^2.27.0",
-    "@slack/bolt": "^5.1.0"
+    "@slack/bolt": "^5.1.0",
+    "exceljs": "^4.4.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^24.19.1",
