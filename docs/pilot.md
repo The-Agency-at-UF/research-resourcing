@@ -1,6 +1,6 @@
 # Dated staffing pilot
 
-This is a fictional-data pilot. DynamoDB is the source of truth for these test assignments. The bot runs locally using Slack Socket Mode; it does not update Excel, allocate real researchers, or expose an HTTP endpoint. `/resource-demo` remains the original undated sample; `/resource-pilot` uses the separate dated model.
+This pilot runs on DynamoDB data seeded from the Research Resourcing workbook layout: the fictional sample workbook by default, or a downloaded copy of the real workbook. DynamoDB is the source of truth for pilot assignments. The bot runs either locally through Slack Socket Mode or hosted on Lambda (see [hosting](hosting.md)); it does not update Excel or allocate real researchers. `/resource-demo` remains the original undated sample; `/resource-pilot` uses the separate dated model.
 
 ## Run
 
@@ -11,37 +11,75 @@ AWS_PROFILE=research-resourcing-pilot
 AWS_REGION=us-east-2
 PILOT_AWS_ACCOUNT_ID=726964604716
 WORKFLOW_TABLE=<WorkflowTable stack output>
-PILOT_NAMESPACE=fictional-v1
+PILOT_NAMESPACE=workbook-sample-v1
 SLACK_TEAM_ID=TB67278DB
 SLACK_BOT_TOKEN=<existing bot token>
 SLACK_APP_TOKEN=<current Socket Mode token>
+# Optional: comma-separated Slack user or channel IDs notified after approvals and assignment changes.
+PILOT_NOTIFY=
+# Optional: channel ID for the Resourcing HQ message the bot keeps up to date.
+PILOT_HQ_CHANNEL=
 ```
 
 Configure `research-resourcing-dev` for the dedicated Research account through Agency SSO. Configure `research-resourcing-pilot` with `source_profile=research-resourcing-dev`, the `PilotClientRoleArn` stack output as `role_arn`, and `region=us-east-2`. Runtime and seed commands verify the account through STS and refuse Studio Stack. No long-lived AWS credentials are stored.
 
 ```bash
 aws sso login --profile research-resourcing-dev
-npm run pilot:seed
+PILOT_NAMESPACE=workbook-sample-v1 npm run pilot:seed -- --sample-workbook   # already done for the shared sample namespace
 npm run slack:pilot
+npm run pilot:metrics
 ```
 
-Seeding an initialized namespace fails, including concurrent repeated seeds. Never use a new namespace as an accidental replacement for existing work. Integration tests deliberately create a unique `integration-<uuid>` namespace and retain their records for inspection. The shared namespace is `fictional-v1`.
+To pilot with real data, download the workbook and seed a new namespace: `PILOT_NAMESPACE=workbook-fall26-v1 npm run pilot:seed -- --workbook ~/Downloads/research.xlsx`, then set that namespace in `.env.pilot`. Real-data namespaces drop the "fictional" label on every screen and notice. With no flag, `pilot:seed` creates the original hours-based fictional data used by the service tests; `/resource-pilot` needs a workbook-seeded namespace because its form asks for roles.
 
-Register `/resource-pilot` from `infra/slack-manifest.json` in the existing app. It needs the same `commands` and `chat:write` scopes, Socket Mode, and interactivity. No new channel history permissions are needed. Slack rotating access tokens still need renewal as described in `slack-demo.md`.
+Seeding an initialized namespace fails, including concurrent repeated seeds. Seeds larger than one transaction commit in 100-item chunks with the `SEED` marker last; an interrupted seed leaves a non-empty namespace that must be abandoned for a new one. Integration tests deliberately create unique `integration-<uuid>` namespaces and retain their records for inspection. `fictional-v1` holds the original hours-based data and is no longer the default.
+
+Register `/resource-pilot` from `infra/slack-manifest.json` in the existing app. It needs the same `commands` and `chat:write` scopes, Socket Mode, and interactivity. Direct-message notices also need App Home's Messages tab, which the manifest enables. To post the HQ message or notices in a channel, invite the bot to that channel. No channel-history permissions are needed. Slack rotating access tokens still need renewal as described in `slack-demo.md`.
+
+## Commands
+
+| Command | Shows |
+|---|---|
+| `/resource-pilot` | New request: account, role (strategist or analyst), openings, inclusive dates, optional minimum years since hire |
+| `/resource-pilot list` or `<request-id>` | Resume a saved request |
+| `/resource-pilot assignments` | Cancel an active or upcoming assignment, or change its dates |
+| `/resource-pilot hq` | Who is on which account from today, current load, and members with no accounts |
+| `/resource-pilot issues` | Workbook import problems: excluded members and warnings |
+| `/resource-pilot metrics` | Request-to-approval time, acceptance of shown candidates, capacity adherence, and changes |
+| `/resource-pilot help` | This list |
+
+Every command checks the workspace and an enabled manager record first; non-managers see no staffing details.
 
 ## Manager flow
 
 The pilot seed enables Patricia, Camila, and Roger using their exact Agency Slack IDs. These pilot permissions must never be treated as a production allowlist. Each service operation checks the workspace and an enabled manager record. The final transaction also checks the manager version so a revoked permission cannot race an approval.
 
-1. Run `/resource-pilot`, select a fictional account, dates, and staffing requirements.
+1. Run `/resource-pilot` and choose an account, the role needed, the number of openings, and inclusive dates. Each opening uses one account slot.
 2. Review two or three recommendations. Select one to five candidates from the retained shortlist, bounded by the remaining openings, or choose to decline remaining openings.
-3. Review the selected researchers, inclusive dates, weekly hours, and minimum remaining capacity. Selection makes no reservation.
+3. Review the selected researchers, inclusive dates, role, and remaining account slots. Selection makes no reservation.
 4. Confirm. Success explicitly means test assignments saved in DynamoDB. If any reviewed record changed, nothing is saved: reload the request and review again.
 5. Use `/resource-pilot list` or `/resource-pilot <request-id>` to resume. Filled and declined requests remain readable. Partial requests require a fresh shortlist for another batch.
 
 All UI results are private modals. Database operations happen after Slack acknowledgement. User-entered content is rendered as plain text; the pilot does not call Gemini.
 
+After an approval commits, the bot sends one notice per approval to each `PILOT_NOTIFY` target (intended for the operations managers, Shea and Charles) and updates the Resourcing HQ message in `PILOT_HQ_CHANNEL`, editing the same message each time. A `NOTICE#<approval>` record makes repeated confirmations silent. Notice or HQ failures are logged and never undo or misreport the saved approval. Ask the recipients before enabling notices; every notice carries the fictional label while sample data is seeded.
+
+## Changing assignments
+
+`/resource-pilot assignments` lists active and upcoming assignments. Managers can cancel one or move its dates. Moving rechecks availability, same-account overlap, account slots, and the researcher's availability window, treating the moved assignment as removed. Cancelling an assignment that came from an approval removes that researcher from the request's filled list and reopens a filled request as partial; a declined request stays closed. Each change is an immutable `CHANGE#<id>` record committed in the same transaction as the schedule, with the manager and researcher versions checked. Assignments are addressed by position, which is stable because assignments are only appended, never removed or reordered.
+
+## Metrics
+
+`/resource-pilot metrics` and `npm run pilot:metrics` compute the brief's measures from stored records:
+
+- **Request to first approval:** median and slowest hours, from the request's `createdAt` (requests created before this field existed are skipped).
+- **Acceptance:** how many approved researchers were among the two or three shown, and how often the top-ranked candidate was chosen.
+- **Capacity adherence:** researchers whose active assignments ever exceed their slots or account limit, with the dates.
+- **Changes:** cancellations and reschedules.
+
 ## Capacity semantics
+
+With workbook-seeded data the same arithmetic runs in account slots: weekly capacity is the three-account cap, each assignment and each requested opening uses one slot, and every screen says "account slots" instead of hours (`seedSettings` reads the unit from the namespace's `SEED` record). The rules below are stated in hours for the original fictional data.
 
 Dates are real `YYYY-MM-DD` calendar dates with inclusive endpoints, independent of time zones and daylight-saving transitions. Existing commitments reserve their full weekly hours on each date in their range; partial weeks are not prorated. Backdated fictional requests are allowed for reproducible scenarios.
 

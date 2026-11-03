@@ -5,7 +5,7 @@ import { datedRequestSchema, datedResearcherSchema, type DatedResearcher, type D
 
 const day = (value: string) => Date.parse(`${value}T00:00:00Z`) / 86_400_000;
 const date = (value: number) => new Date(value * 86_400_000).toISOString().slice(0, 10);
-export function capacityForPeriod(r: DatedResearcher, request: DatedRequest) {
+export function capacityForPeriod(r: DatedResearcher, request: Pick<DatedRequest, 'accountId' | 'hoursPerResearcher' | 'startDate' | 'endDate'>) {
   const start = day(request.startDate), end = day(request.endDate);
   const assignments = r.assignments.filter(a => a.status === 'active' && a.startDate <= request.endDate && a.endDate >= request.startDate);
   const boundaries = [...new Set([start, end + 1, ...assignments.flatMap(a => [Math.max(start, day(a.startDate)), Math.min(end + 1, day(a.endDate) + 1)])])].sort((a, b) => a - b);
@@ -24,6 +24,19 @@ export function capacityForPeriod(r: DatedResearcher, request: DatedRequest) {
     if (active.some(a => a.accountId === request.accountId)) reasons.push(`Already assigned to this account on ${period}`);
   }
   return { minFreeHours, maxAccounts, reasons };
+}
+
+/** Periods where active commitments exceed weekly capacity or the simultaneous account limit. */
+export function overloads(r: DatedResearcher) {
+  const active = r.assignments.filter(a => a.status === 'active');
+  const points = [...new Set(active.flatMap(a => [day(a.startDate), day(a.endDate) + 1]))].sort((a, b) => a - b);
+  const found: { from: string; until: string; load: number; accounts: number }[] = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    const from = points[i]!, current = active.filter(a => day(a.startDate) <= from && day(a.endDate) >= from);
+    const load = current.reduce((sum, a) => sum + a.hoursPerWeek, 0), accounts = new Set(current.map(a => a.accountId)).size;
+    if (load > r.weeklyCapacityHours + 1e-9 || accounts > r.maxAccounts) found.push({ from: date(from), until: date(points[i + 1]! - 1), load, accounts });
+  }
+  return found;
 }
 
 /** Separate dated boundary; never interpret old snapshot totals as a schedule. */

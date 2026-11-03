@@ -26,7 +26,7 @@ export interface Manager { enabled: boolean; name: string }
 export interface Account { id: string; name: string }
 export interface RequestState {
   request: DatedRequest; filledResearcherIds: string[];
-  status: 'awaiting_manager' | 'partial' | 'filled' | 'declined'; runId?: string;
+  status: 'awaiting_manager' | 'partial' | 'filled' | 'declined'; runId?: string; createdAt?: string;
 }
 export interface RunState { run: DatedRun; researcherVersions: Record<string, number>; configVersion: number }
 export interface Review {
@@ -35,6 +35,14 @@ export interface Review {
   summaries: { researcherId: string; name: string; hoursAfterAssignment: number }[]; createdAt: string;
 }
 export interface Approval { id: string; requestId: string; actor: Actor; assignmentIds: string[]; researcherIds: string[]; approvedAt: string }
+export interface SeedInfo { fictional: boolean; schemaVersion: number; source?: string; capacity?: 'hours' | 'account-slots'; maxAccounts?: number }
+export interface ImportReport { source: string; importedAt: string; warnings: string[]; excluded: { researcherId: string; reasons: string[] }[] }
+type Span = Pick<Assignment, 'startDate' | 'endDate' | 'status'>;
+export interface Change {
+  id: string; action: 'cancel' | 'reschedule'; actor: Actor; researcherId: string; assignmentId: string; accountId: string;
+  requestId?: string; before: Span; after: Span; changedAt: string;
+}
+export interface HqLocation { channel: string; ts: string }
 export class PilotError extends Error {
   constructor(public code: 'unauthorized' | 'invalid' | 'stale' | 'closed' | 'not_found', message: string) { super(message); }
 }
