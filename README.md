@@ -2,6 +2,8 @@
 
 The dated DynamoDB pilot is documented in [pilot setup and approval rules](docs/pilot.md). `/resource-pilot` supports date-aware capacity, manager-only selection, and atomic batch approval with fresh availability checks. It uses fictional AWS data; the undated demo below remains available.
 
+Research's real staffing workbook (member roster plus account grid) can be ranked locally with `npm run workbook -- <downloaded.xlsx>`; capacity is measured in account slots because the workbook has no hours. See [workbook import](docs/workbook.md).
+
 A research staffing prototype based on the Resourcing Agent Brief: filter eligibility, rank researchers with configurable criteria, retain up to five candidates, and display two or three recommendations to managers.
 
 ## Run locally
