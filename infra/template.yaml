@@ -1,13 +1,26 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Research Resourcing scoring development stack (no public endpoint)
+Description: Research staffing pilot with versioned atomic approvals; local Slack ingress and fictional data only
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    ref:
+      - at: docs/pilot.md
+        has: pilot deployment, transaction invariants, and runtime permissions
+Parameters:
+  PilotOperatorArn:
+    Type: String
+    AllowedPattern: '^arn:aws:iam::[0-9]{12}:role/.+$'
+    Description: Existing project SSO role allowed to assume the restricted local pilot role
 Resources:
   ScoringFunction:
     Type: AWS::Serverless::Function
     Properties:
       Runtime: nodejs24.x
       Handler: lambda.handler
-      CodeUri: ../dist/
+      # Keep the bundled ESM handler separate from tsc's unbundled lambda.js.
+      CodeUri: ../dist/lambda/
       MemorySize: 256
       Timeout: 15
       Architectures:
@@ -41,6 +54,49 @@ Resources:
           KeyType: HASH
         - AttributeName: researcher_id
           KeyType: RANGE
+  WorkflowState:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    # Schedule, request, permission, and policy versions protect each approval transaction.
+    # Never overwrite state using the seed script or remove retain policies.
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+  PilotClientRole:
+    Type: AWS::IAM::Role
+    # Local Socket Mode uses temporary assumed-role credentials; no public ingress or stored AWS keys.
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref PilotOperatorArn
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WorkflowPilotAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:PutItem
+                  - dynamodb:ConditionCheckItem
+                Resource: !GetAtt WorkflowState.Arn
 Outputs:
   ScoringFunctionName:
     Value: !Ref ScoringFunction
@@ -48,3 +104,9 @@ Outputs:
     Value: !Ref RecommendationRuns
   RecommendationResultsTable:
     Value: !Ref RecommendationResults
+  WorkflowTable:
+    Description: Fictional pilot workflow and immutable decision records
+    Value: !Ref WorkflowState
+  PilotClientRoleArn:
+    Description: Restricted role for the local Slack pilot
+    Value: !GetAtt PilotClientRole.Arn

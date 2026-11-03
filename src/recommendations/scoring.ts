@@ -2,6 +2,7 @@ import {
   configSchema, criteria, requestSchema, researcherSchema,
   type Breakdown, type Criterion, type Recommendation, type RecommendationRun,
 } from './models.js';
+import { availableHours } from './hours.js';
 
 /** Pure ranking function: no assignments, writes, network calls, or generated facts. */
 export function recommend(rawResearchers: unknown[], rawRequest: unknown, rawConfig: unknown): RecommendationRun {
@@ -30,7 +31,7 @@ export function recommend(rawResearchers: unknown[], rawRequest: unknown, rawCon
       return;
     }
     const r = parsed.data;
-    const remainingHours = r.weeklyCapacityHours - r.committedHours;
+    const remainingHours = availableHours(r.weeklyCapacityHours - r.committedHours, request.hoursPerResearcher, r.weeklyCapacityHours);
     const reasons: string[] = [];
     if (!r.active) reasons.push('Researcher is inactive');
     if (remainingHours < request.hoursPerResearcher) reasons.push(`Only ${remainingHours} hours available; ${request.hoursPerResearcher} required`);

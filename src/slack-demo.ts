@@ -4,6 +4,10 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { recommend } from './recommendations/scoring.js';
 import { registerDemoHandlers } from './slack/handlers.js';
 import { explainWithGemini, GEMINI_BASE_MODEL } from './integrations/gemini.js';
+import { registerPilotHandlers } from './slack/pilot.js';
+import { PilotService } from './pilot/service.js';
+import { configuredPilotStore } from './pilot/dynamodb-store.js';
+import { verifyPilotTarget } from './pilot/runtime.js';
 
 const token = process.env.SLACK_BOT_TOKEN;
 const appToken = process.env.SLACK_APP_TOKEN;
@@ -27,5 +31,9 @@ registerDemoHandlers(app, teamId, data, async (run, explanation) => {
     console.error('The result was shown, but the local demo record could not be saved. Check artifacts/slack-runs permissions.');
   }
 }, run => explainWithGemini(run, { apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL, systemInstruction }));
+if (process.env.WORKFLOW_TABLE) {
+  await verifyPilotTarget();
+  registerPilotHandlers(app, new PilotService(configuredPilotStore(), teamId));
+} else registerPilotHandlers(app);
 await app.start();
 console.log('Staffing Recommendation Beta connected (fictional sample data). Run /resource-demo or /resource-demo form in the configured workspace.');

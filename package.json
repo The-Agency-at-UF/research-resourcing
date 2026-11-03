@@ -7,11 +7,14 @@
     "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
-    "build:lambda": "esbuild src/lambda.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/lambda.mjs",
+    "build:lambda": "esbuild src/lambda.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/lambda/lambda.mjs",
     "access:check": "node --env-file-if-exists=.env --import tsx src/scripts/check-access.ts",
     "microsoft:check": "node --env-file=.env --import tsx src/scripts/check-microsoft.ts",
     "demo:gemini": "node --env-file-if-exists=.env --import tsx src/gemini-demo.ts",
-    "slack:demo": "node --env-file=.env --import tsx src/slack-demo.ts"
+    "slack:demo": "node --env-file=.env --import tsx src/slack-demo.ts",
+    "slack:pilot": "node --env-file=.env.pilot --import tsx src/slack-demo.ts",
+    "pilot:seed": "node --env-file=.env.pilot --import tsx src/scripts/seed-pilot.ts",
+    "test:pilot:aws": "node --env-file=.env.pilot --import tsx --test tests/pilot-aws.integration.ts"
   },
   "repository": {
     "type": "git",

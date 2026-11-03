@@ -1,5 +1,7 @@
 # Research Resourcing
 
+The dated DynamoDB pilot is documented in [pilot setup and approval rules](docs/pilot.md). `/resource-pilot` supports date-aware capacity, manager-only selection, and atomic batch approval with fresh availability checks. It uses fictional AWS data; the undated demo below remains available.
+
 A research staffing prototype based on the Resourcing Agent Brief: filter eligibility, rank researchers with configurable criteria, retain up to five candidates, and display two or three recommendations to managers.
 
 ## Run locally
@@ -68,7 +70,7 @@ Try 40 hours/week for a no-match result or 10 openings for a shortage. Fixtures 
 
 ## Scope
 
-This phase implements scoring, a fictional-data Slack demo, and technology/access scaffolding. Live Excel parsing/sync, date-aware capacity, manager authorization, approvals, verified updates to both Excel datasets, operations notifications, and Slack Canvas updates remain future work. Eligibility must be rechecked against fresh data before saving approved assignments; partial Excel updates must be reconciled.
+The undated demo implements scoring and optional explanations. The separate fictional DynamoDB pilot adds date-aware capacity, manager authorization, selection, and atomic approvals with fresh checks. Live Excel parsing/sync, verified updates to both Excel datasets, operations notifications, and Slack Canvas updates remain future work. A DynamoDB test approval does not confirm an Excel update or a real assignment.
 
 See [technology notes](docs/tech-stack.md) for working features versus prepared integration pieces. Gemini is optional for explanations and never determines scores. Fine-tuning is not required.
 

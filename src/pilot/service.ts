@@ -1,0 +1,134 @@
+import { randomUUID } from 'node:crypto';
+import { configSchema, type ScoringConfig } from '../recommendations/models.js';
+import { recommendForPeriod } from './capacity.js';
+import { datedRequestSchema, datedResearcherSchema, PilotError, type Account, type Actor, type Approval,
+  type DatedResearcher, type Manager, type RequestState, type Review, type RunState } from './models.js';
+import { ConflictError, type Check, type PilotStore, type Row } from './store.js';
+
+const required = <T>(row: Row | undefined): Row<T> => {
+  if (!row) throw new PilotError('not_found', 'The pilot record was not found.');
+  return row as Row<T>;
+};
+const check = (row: Row): Check => ({ key: row.key, version: row.version });
+const next = <T>(row: Row<T>, data: T): Row<T> => ({ ...row, version: row.version + 1, data });
+const id = (value: string) => {
+  if (!/^[a-zA-Z0-9_-]{1,100}$/.test(value)) throw new PilotError('invalid', 'Invalid pilot identifier.');
+  return value;
+};
+export class PilotService {
+  constructor(public store: PilotStore, public teamId: string, private clock: () => Date = () => new Date()) {}
+  private managerKey(actor: Actor) {
+    if (actor.teamId !== this.teamId || !/^U[A-Z0-9]+$/.test(actor.userId)) throw new PilotError('unauthorized', 'Only configured pilot managers may use this workflow.');
+    return `MANAGER#${actor.userId}`;
+  }
+  private validateManager(row: Row | undefined): Row<Manager> {
+    if (!row || (row.data as Manager)?.enabled !== true) throw new PilotError('unauthorized', 'Only configured pilot managers may use this workflow.');
+    return row as Row<Manager>;
+  }
+  async authorize(actor: Actor) { return this.validateManager(await this.store.get(this.managerKey(actor))); }
+  async accounts(actor: Actor) { await this.authorize(actor); return (await this.store.list<Account>('ACCOUNT#')).map(r => r.data); }
+  async requests(actor: Actor) { await this.authorize(actor); return this.store.list<RequestState>('REQUEST#'); }
+  async request(actor: Actor, requestId: string) { await this.authorize(actor); return required<RequestState>(await this.store.get(`REQUEST#${id(requestId)}`)); }
+  private async write(puts: Row[], checks: Check[]) {
+    try { await this.store.commit(puts, checks); }
+    catch (error) { if (error instanceof ConflictError) throw new PilotError('stale', error.message); throw error; }
+  }
+  async createRequest(actor: Actor, input: unknown, requestId: string = randomUUID()) {
+    const manager = await this.authorize(actor), request = datedRequestSchema.parse(input);
+    const account = required<Account>(await this.store.get(`ACCOUNT#${id(request.accountId)}`));
+    if (request.accountName !== account.data.name) throw new PilotError('invalid', 'Choose a configured fictional account.');
+    const key = `REQUEST#${id(requestId)}`, existing = await this.store.get<RequestState>(key);
+    if (existing) {
+      if (JSON.stringify(existing.data.request) !== JSON.stringify(request)) throw new PilotError('invalid', 'This request identifier is already in use.');
+      return requestId;
+    }
+    await this.write([{ key, version: 1, data: { request, filledResearcherIds: [], status: 'awaiting_manager' } satisfies RequestState }],
+      [check(manager), check(account), { key, version: null }]);
+    return requestId;
+  }
+  async recommendations(actor: Actor, requestId: string) {
+    const [managerRow, requestRow, configRow] = await this.store.getMany([this.managerKey(actor), `REQUEST#${id(requestId)}`, 'CONFIG']);
+    const manager = this.validateManager(managerRow), state = required<RequestState>(requestRow), policy = required<ScoringConfig>(configRow);
+    this.open(state.data);
+    const config = configSchema.parse(policy.data), researchers = await this.store.list<DatedResearcher>('RESEARCHER#');
+    const run = recommendForPeriod(researchers.map(r => r.data), { ...state.data.request, openings: state.data.request.openings - state.data.filledResearcherIds.length }, config);
+    const runId = randomUUID();
+    const record: RunState = { run, configVersion: policy.version, researcherVersions: Object.fromEntries(researchers.map(r => [(r.data as DatedResearcher).id, r.version])) };
+    await this.write([{ key: `RUN#${runId}`, version: 1, data: record }, next(state, { ...state.data, runId })],
+      [check(manager), check(policy), check(state), { key: `RUN#${runId}`, version: null }]);
+    return { runId, ...record };
+  }
+  private open(state: RequestState) {
+    if (state.status === 'filled' || state.status === 'declined') throw new PilotError('closed', `This request is ${state.status}.`);
+  }
+  async prepareApproval(actor: Actor, requestId: string, runId: string, selectedIds: string[]) {
+    const managerKey = this.managerKey(actor);
+    if (!selectedIds.length || selectedIds.length > 5 || new Set(selectedIds).size !== selectedIds.length) throw new PilotError('invalid', 'Choose one to five unique candidates.');
+    selectedIds.forEach(id);
+    const keys = [managerKey, `REQUEST#${id(requestId)}`, `RUN#${id(runId)}`, 'CONFIG', ...selectedIds.map(s => `RESEARCHER#${s}`)];
+    const rows = await this.store.getMany(keys);
+    const manager = this.validateManager(rows[0]), state = required<RequestState>(rows[1]), savedRun = required<RunState>(rows[2]), policy = required<ScoringConfig>(rows[3]);
+    this.open(state.data);
+    if (state.data.runId !== runId || savedRun.data.configVersion !== policy.version) throw new PilotError('stale', 'Recommendations changed. Refresh and review again.');
+    if (selectedIds.length > state.data.request.openings - state.data.filledResearcherIds.length) throw new PilotError('invalid', 'Too many selections for the remaining openings.');
+    if (selectedIds.some(s => !savedRun.data.run.retained.some(r => r.researcherId === s) || state.data.filledResearcherIds.includes(s))) throw new PilotError('invalid', 'Choose unassigned candidates from this retained shortlist.');
+    const researchers = rows.slice(4).map(row => required<DatedResearcher>(row));
+    if (researchers.some((row, i) => row.data.id !== selectedIds[i])) throw new PilotError('invalid', 'A researcher record has a conflicting identifier.');
+    if (researchers.some(r => r.version !== savedRun.data.researcherVersions[r.data.id])) throw new PilotError('stale', 'Researcher availability changed. Refresh recommendations and review again.');
+    const validated = recommendForPeriod(researchers.map(r => r.data), { ...state.data.request, openings: selectedIds.length }, configSchema.parse(policy.data));
+    if (validated.eligibleCount !== selectedIds.length) throw new PilotError('stale', 'A selected researcher is no longer eligible. Refresh recommendations.');
+    const approvalId = randomUUID();
+    const review: Review = { requestId, runId, actor, selectedIds: [...selectedIds], requestVersion: state.version,
+      managerVersion: manager.version, configVersion: policy.version,
+      researcherVersions: Object.fromEntries(researchers.map(r => [r.data.id, r.version])),
+      summaries: validated.retained.map(r => ({ researcherId: r.researcherId, name: r.name, hoursAfterAssignment: r.hoursAfterAssignment })), createdAt: this.clock().toISOString() };
+    await this.write([{ key: `REVIEW#${approvalId}`, version: 1, data: review }],
+      [check(manager), check(state), check(policy), ...researchers.map(check), { key: `REVIEW#${approvalId}`, version: null }]);
+    return { approvalId, review, request: state.data.request };
+  }
+  async approve(actor: Actor, approvalId: string): Promise<Approval> {
+    const manager = await this.authorize(actor);
+    const reviewRow = required<Review>(await this.store.get(`REVIEW#${id(approvalId)}`)), review = reviewRow.data;
+    if (review.actor.teamId !== actor.teamId || review.actor.userId !== actor.userId) throw new PilotError('unauthorized', 'This confirmation belongs to another manager.');
+    const keys = [manager.key, `REQUEST#${review.requestId}`, 'CONFIG', `APPROVAL#${approvalId}`, ...review.selectedIds.map(s => `RESEARCHER#${s}`)];
+    const rows = await this.store.getMany(keys), currentManager = this.validateManager(rows[0]);
+    if (rows[3]) return required<Approval>(rows[3]).data;
+    const state = required<RequestState>(rows[1]), policy = required<ScoringConfig>(rows[2]); this.open(state.data);
+    const researchers = rows.slice(4).map(r => required<DatedResearcher>(r));
+    if (researchers.some((row, i) => row.data.id !== review.selectedIds[i])) throw new PilotError('invalid', 'A researcher record has a conflicting identifier.');
+    if (currentManager.version !== review.managerVersion || state.version !== review.requestVersion || policy.version !== review.configVersion ||
+        state.data.runId !== review.runId || researchers.some(r => r.version !== review.researcherVersions[r.data.id])) throw new PilotError('stale', 'Records changed after your review. Refresh recommendations and confirm again.');
+    const request = state.data.request;
+    if (review.selectedIds.length > request.openings - state.data.filledResearcherIds.length || review.selectedIds.some(s => state.data.filledResearcherIds.includes(s))) throw new PilotError('stale', 'The remaining openings changed.');
+    const fresh = recommendForPeriod(researchers.map(r => r.data), { ...request, openings: review.selectedIds.length }, configSchema.parse(policy.data));
+    if (fresh.eligibleCount !== review.selectedIds.length) throw new PilotError('stale', 'Availability no longer meets the request. Refresh recommendations.');
+    const approval: Approval = { id: approvalId, requestId: review.requestId, actor, researcherIds: [...review.selectedIds],
+      assignmentIds: review.selectedIds.map(s => `${approvalId}_${s}`), approvedAt: this.clock().toISOString() };
+    const filled = [...state.data.filledResearcherIds, ...review.selectedIds];
+    const puts: Row[] = researchers.map(row => next(row, datedResearcherSchema.parse({ ...row.data, assignments: [...row.data.assignments, {
+      id: `${approvalId}_${row.data.id}`, accountId: request.accountId, startDate: request.startDate, endDate: request.endDate,
+      hoursPerWeek: request.hoursPerResearcher, status: 'active',
+    }] })));
+    puts.push(next(state, { ...state.data, filledResearcherIds: filled, status: filled.length === request.openings ? 'filled' : 'partial' }),
+      { key: `APPROVAL#${approvalId}`, version: 1, data: approval });
+    try {
+      await this.write(puts, [check(currentManager), check(state), check(policy), check(reviewRow), ...researchers.map(check), { key: `APPROVAL#${approvalId}`, version: null }]);
+    } catch (error) {
+      // A successful commit may have lost its response, or a duplicate callback may race it.
+      const recorded = await this.store.get<Approval>(`APPROVAL#${approvalId}`);
+      if (recorded) { await this.authorize(actor); return recorded.data; }
+      throw error;
+    }
+    return approval;
+  }
+  async decline(actor: Actor, requestId: string, expectedVersion: number) {
+    const rows = await this.store.getMany([this.managerKey(actor), `REQUEST#${id(requestId)}`]);
+    const manager = this.validateManager(rows[0]), state = required<RequestState>(rows[1]);
+    if (state.version !== expectedVersion) throw new PilotError('stale', 'The request changed. Review its current state first.');
+    this.open(state.data);
+    const auditId = randomUUID();
+    await this.write([next(state, { ...state.data, status: 'declined' }), { key: `DECLINE#${auditId}`, version: 1,
+      data: { requestId, actor, declinedAt: this.clock().toISOString(), filledResearcherIds: state.data.filledResearcherIds } }],
+      [check(manager), check(state), { key: `DECLINE#${auditId}`, version: null }]);
+  }
+}
