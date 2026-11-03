@@ -10,14 +10,14 @@
 | Ranking | Pure TypeScript weighted scoring | Working: five retained, two or three displayed |
 | Slack | Bolt JS local Socket Mode | Fixed demo, request form, opt-in Gemini sample, private results, and local run records; see [setup](slack-demo.md) |
 | Compute | AWS Lambda Node.js 24 | Direct-invoke handler and bundle ready; not deployed |
-| Storage | DynamoDB | Optional transaction adapter and undeployed SAM run/result tables |
+| Storage | DynamoDB | Versioned dated staffing pilot and atomic batch approvals; separate legacy audit adapter; see [pilot setup](pilot.md) |
 | Explanations | Factual templates; opt-in Gemini fact selection | CLI and Slack adapter with system instructions, strict validation, and labeled fallback |
 
 Node 24 is supported by [AWS Lambda](https://docs.aws.amazon.com/lambda/latest/dg/lambda-nodejs.html). Use the same major locally and in CI. Roger's system Node was 25.9.0; verification runs with bundled Node 24 without changing that installation.
 
 The source diagram proposes OpenAI. Roger already has Gemini access, so an opt-in Gemini adapter selects verified facts while scoring remains independent of any model. Agree on the provider substitution with the Dev team before integration. An OpenAI account is not required for this phase.
 
-The SAM template includes scoring and recommendation audit storage only. Managers, Researchers, Accounts, Assignments, and ScoringWeights from the complete diagram belong to later data/approval work. The direct handler does not automatically call persistence and has no DynamoDB access policy yet. Connect through a trusted service and add narrowly scoped table permissions when enabling persistence. The CLI already retains the top five locally in `artifacts/recommendation-run.json`.
+The SAM template includes scoring, the original recommendation audit tables, and a fictional workflow table for dated researcher schedules, managers, accounts, requests, policies, and decisions. The local pilot uses a restricted assumed role for this workflow table. The direct scoring handler remains separate and does not automatically call persistence or acquire workflow permissions. The legacy CLI retains the top five locally in `artifacts/recommendation-run.json`.
 
 The Slack Socket Mode demo needs a long-running process. Production Lambda would need an HTTPS receiver with signature verification and prompt acknowledgement, or a separately hosted persistent Socket Mode process.
 

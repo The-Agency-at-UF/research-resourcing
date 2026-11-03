@@ -1,8 +1,10 @@
 node_modules/
 dist/
 .env
+.env.pilot
 .env.*
 !.env.example
+!.env.pilot.example
 artifacts/
 data/private/
 *.xlsx
