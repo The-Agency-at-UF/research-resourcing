@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Research staffing pilot with versioned atomic approvals; local Slack ingress and fictional data only
+Description: Research staffing pilot with versioned atomic approvals; Slack ingress through a signed Lambda Function URL
 Metadata:
   AWSToolsMetrics:
     AWSAgentToolkit: aws-cloudformation@3
@@ -13,6 +13,33 @@ Parameters:
     Type: String
     AllowedPattern: '^arn:aws:iam::[0-9]{12}:role/.+$'
     Description: Existing project SSO role allowed to assume the restricted local pilot role
+  PilotNamespace:
+    Type: String
+    Default: workbook-sample-v1
+    AllowedPattern: '^[a-zA-Z0-9_-]{1,80}$'
+    Description: Workflow namespace the hosted Slack app reads and writes
+  PilotFictional:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Label for loading screens; the worker reads the namespace's own label for results
+  PilotNotify:
+    Type: String
+    Default: ''
+    Description: Comma-separated Slack user or channel IDs notified after approvals and changes
+  PilotHqChannel:
+    Type: String
+    Default: ''
+    Description: Slack channel ID for the Resourcing HQ message
+  SlackTeamId:
+    Type: String
+    Default: TB67278DB
+    AllowedPattern: '^T[A-Z0-9]+$'
+  SlackParameterPrefix:
+    Type: String
+    Default: /research-resourcing/pilot
+    AllowedPattern: '^/[a-zA-Z0-9/_-]+$'
+    Description: SSM path holding SecureString SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET, created by an operator
 Resources:
   ScoringFunction:
     Type: AWS::Serverless::Function
@@ -97,7 +124,82 @@ Resources:
                   - dynamodb:PutItem
                   - dynamodb:ConditionCheckItem
                 Resource: !GetAtt WorkflowState.Arn
+  # Public Slack ingress. Bolt rejects requests without a valid Slack signature; this function has no data access and only
+  # acknowledges, opens loading views, and invokes the worker.
+  SlackReceiverFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs24.x
+      Handler: receiver.handler
+      CodeUri: ../dist/slack-lambda/
+      MemorySize: 512
+      Timeout: 10
+      Architectures:
+        - arm64
+      FunctionUrlConfig:
+        AuthType: NONE
+      Environment:
+        Variables:
+          SLACK_TEAM_ID: !Ref SlackTeamId
+          PILOT_FICTIONAL: !Ref PilotFictional
+          WORKER_FUNCTION: !Ref SlackWorkerFunction
+          PARAMETER_PREFIX: !Ref SlackParameterPrefix
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameters
+              Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SlackParameterPrefix}/*'
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt SlackWorkerFunction.Arn
+  # Private worker: database work and Slack updates for one job. Retries are off so a job never runs twice.
+  SlackWorkerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: nodejs24.x
+      Handler: worker.handler
+      CodeUri: ../dist/slack-lambda/
+      MemorySize: 512
+      Timeout: 60
+      Architectures:
+        - arm64
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+      Environment:
+        Variables:
+          WORKFLOW_TABLE: !Ref WorkflowState
+          PILOT_NAMESPACE: !Ref PilotNamespace
+          PILOT_AWS_ACCOUNT_ID: '726964604716'
+          SLACK_TEAM_ID: !Ref SlackTeamId
+          PILOT_NOTIFY: !Ref PilotNotify
+          PILOT_HQ_CHANNEL: !Ref PilotHqChannel
+          PARAMETER_PREFIX: !Ref SlackParameterPrefix
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+                - dynamodb:PutItem
+                - dynamodb:ConditionCheckItem
+              Resource: !GetAtt WorkflowState.Arn
+            - Effect: Allow
+              Action: ssm:GetParameters
+              Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SlackParameterPrefix}/*'
+  SlackReceiverLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${SlackReceiverFunction}'
+      RetentionInDays: 30
+  SlackWorkerLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${SlackWorkerFunction}'
+      RetentionInDays: 30
 Outputs:
+  SlackRequestUrl:
+    Description: Request URL for slash commands and interactivity in the Slack app
+    Value: !GetAtt SlackReceiverFunctionUrl.FunctionUrl
   ScoringFunctionName:
     Value: !Ref ScoringFunction
   RecommendationRunsTable:
