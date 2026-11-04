@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { configSchema, type ScoringConfig } from '../recommendations/models.js';
 import { capacityForPeriod, recommendForPeriod } from './capacity.js';
 import { dateSchema, datedRequestSchema, datedResearcherSchema, PilotError, type Account, type Actor, type Approval, type Assignment, type Change,
-  type DatedResearcher, type HqLocation, type ImportReport, type Manager, type RequestState, type Review, type RunState, type SeedInfo } from './models.js';
+  type DatedResearcher, type HqLocation, type ImportReport, type Manager, type RequestState, type Review, type RunState, type SeedInfo, type ManagerChange } from './models.js';
 import { planImport, type CurrentState, type ImportDraft } from './import.js';
 import { computeMetrics } from './reports.js';
 import { PILOT_MANAGERS, seedFrom, seedRows } from './seed.js';
@@ -20,7 +20,9 @@ const id = (value: string) => {
   return value;
 };
 export class PilotService {
-  constructor(public store: PilotStore, public teamId: string, private clock: () => Date = () => new Date(), public units: CapacityUnits = HOURS) {}
+  /** `admins` may change the manager list (operations leads); they need not be staffing managers themselves. */
+  constructor(public store: PilotStore, public teamId: string, private clock: () => Date = () => new Date(), public units: CapacityUnits = HOURS,
+    private admins: string[] = []) {}
   today() { return this.clock().toISOString().slice(0, 10); }
   private managerKey(actor: Actor) {
     if (actor.teamId !== this.teamId || !/^U[A-Z0-9]+$/.test(actor.userId)) throw new PilotError('unauthorized', 'Only configured pilot managers may use this workflow.');
@@ -258,6 +260,33 @@ export class PilotService {
     if (plan.puts.length + 1 + 1 > 100) throw new PilotError('invalid', `This upload changes ${plan.puts.length} records, more than one atomic update allows. Seed a new namespace from it with npm run pilot:seed instead.`);
     await this.write([...plan.puts, done], checks);
     return { applied: true, lines: plan.lines, initial: false };
+  }
+  private requireAdmin(actor: Actor) {
+    this.managerKey(actor);
+    if (!this.admins.includes(actor.userId)) throw new PilotError('unauthorized', 'Only the configured operations leads may change pilot managers.');
+  }
+  async managers(actor: Actor) {
+    this.requireAdmin(actor);
+    return (await this.store.list<Manager>('MANAGER#')).map(r => ({ userId: r.key.slice(8), ...r.data })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+  /**
+   * Add, re-enable, or remove (disable) a manager, with an immutable record. Rows are kept so history stays attributable. Every
+   * enabled manager row is checked, so two concurrent removals can never leave the pilot without a manager.
+   */
+  async setManager(actor: Actor, userId: string, action: 'add' | 'remove', name?: string) {
+    this.requireAdmin(actor);
+    const key = this.managerKey({ teamId: actor.teamId, userId });
+    const rows = await this.store.list<Manager>('MANAGER#'), row = rows.find(r => r.key === key);
+    const enabled = rows.filter(r => r.data.enabled === true);
+    if (action === 'add' && row?.data.enabled) throw new PilotError('invalid', `${row.data.name} is already a pilot manager.`);
+    if (action === 'remove' && !row?.data.enabled) throw new PilotError('invalid', 'That person is not a pilot manager.');
+    if (action === 'remove' && enabled.length <= 1) throw new PilotError('invalid', 'Keep at least one pilot manager. Add another manager before removing this one.');
+    const label = (name ?? '').trim().slice(0, 80) || row?.data.name || userId;
+    const record: ManagerChange = { id: randomUUID(), actor, userId, action, name: label, changedAt: this.clock().toISOString() };
+    const data: Manager = { name: label, enabled: action === 'add' };
+    await this.write([row ? next(row, data) : { key, version: 1, data }, { key: `MANAGERCHANGE#${record.id}`, version: 1, data: record }],
+      [...enabled.filter(r => r.key !== key).map(check), row ? check(row) : { key, version: null }, { key: `MANAGERCHANGE#${record.id}`, version: null }]);
+    return record;
   }
   hqLocation() { return this.store.get<HqLocation>('HQ'); }
   async saveHqLocation(location: HqLocation, previous?: Row<HqLocation>) {

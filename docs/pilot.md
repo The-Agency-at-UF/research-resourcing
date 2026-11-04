@@ -47,13 +47,14 @@ Register `/resource-pilot` from `infra/slack-manifest.json` in the existing app.
 | `/resource-pilot issues` | Workbook import problems: excluded members and warnings |
 | `/resource-pilot metrics` | Request-to-approval time, acceptance of shown candidates, capacity adherence, and changes |
 | `/resource-pilot import` | Upload the workbook (and optional profile sheets), review every change, then apply |
+| `/resource-pilot managers` | Operations leads add or remove pilot managers |
 | `/resource-pilot help` | This list |
 
 Every command checks the workspace and an enabled manager record first; non-managers see no staffing details.
 
 ## Manager flow
 
-The pilot seed enables Patricia, Camila, and Roger using their exact Agency Slack IDs. These pilot permissions must never be treated as a production allowlist. Each service operation checks the workspace and an enabled manager record. The final transaction also checks the manager version so a revoked permission cannot race an approval.
+A new namespace starts with Patricia, Camila, and Roger, by their exact Agency Slack IDs. After that, the manager records in the namespace are the only list. Operations leads named in `PILOT_ADMINS` (the `PilotAdmins` stack parameter: Shea, Charles, and Mark) change the list with `/resource-pilot managers`. They do not need to be staffing managers themselves. Removing a manager disables the record rather than deleting it, so history stays attributable. Each change writes an immutable `MANAGERCHANGE#<id>` record and is announced to `PILOT_NOTIFY`. Every enabled manager record is checked in the same transaction, so concurrent removals can never leave the pilot with no manager. These pilot permissions must never be treated as a production allowlist. Each service operation checks the workspace and an enabled manager record. The final transaction also checks the manager version so a revoked permission cannot race an approval.
 
 1. Run `/resource-pilot` and choose an account, the role needed, the number of openings, and inclusive dates. Each opening uses one account slot.
 2. Review two or three recommendations. Select one to five candidates from the retained shortlist, bounded by the remaining openings, or choose to decline remaining openings.
@@ -108,7 +109,7 @@ Ranking uses minimum free weekly hours and maximum simultaneous account count ac
 
 ## Persistence and transaction invariants
 
-The workflow table has `pk=PILOT#<namespace>` and typed `sk` prefixes: `RESEARCHER#`, `ACCOUNT#`, `MANAGER#`, `REQUEST#`, `RUN#`, `REVIEW#`, `APPROVAL#`, `DECLINE#`, `CHANGE#`, `NOTICE#`, `IMPORTDRAFT#`, `IMPORT`, `HQ`, `CONFIG`, and `SEED`. Each item has a positive version and typed application data. Researcher items contain their complete profile and schedule; historical growth is bounded by a conservative 350 KB application guard before DynamoDB's item limit. Archival requires a separate versioned migration.
+The workflow table has `pk=PILOT#<namespace>` and typed `sk` prefixes: `RESEARCHER#`, `ACCOUNT#`, `MANAGER#`, `REQUEST#`, `RUN#`, `REVIEW#`, `APPROVAL#`, `DECLINE#`, `CHANGE#`, `MANAGERCHANGE#`, `NOTICE#`, `IMPORTDRAFT#`, `IMPORT`, `HQ`, `CONFIG`, and `SEED`. Each item has a positive version and typed application data. Researcher items contain their complete profile and schedule; historical growth is bounded by a conservative 350 KB application guard before DynamoDB's item limit. Archival requires a separate versioned migration.
 
 Recommendations and reviews are persisted before their modal appears. Review IDs are server-generated approval IDs, tied to the approving actor and immutable selected candidates. The approval path rereads manager, request, configuration, prior approval, and selected researcher rows using a transactional read. It reruns eligibility and requires the versions seen during review to match.
 

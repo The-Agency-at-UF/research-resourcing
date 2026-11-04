@@ -20,6 +20,8 @@ export const profilesSchema = z.object({
     accountCap: z.number().int().positive().optional(),
     // Last day they can work, when a 1:1 says they leave or study away before graduating.
     availableUntil: dateSchema.optional(),
+    // Terms ("Spring 2027") or ranges ("2027-01-11 to 2027-04-30") away and then returning.
+    away: z.array(z.string().trim().min(1)).default([]),
     interests: tags, industryExperience: tags, tools: tags,
   }).strict()),
 }).strict();
@@ -30,7 +32,7 @@ export const accountIndustries = (profiles: Profiles | undefined) =>
   new Map(Object.entries(profiles?.accounts ?? {}).map(([name, industries]) => [slug(name), industries]));
 
 /** Column headers of the optional Profiles and Account Industries sheets; list cells are comma-separated. */
-export const PROFILE_COLUMNS = ['NAME', 'HOURS PER WEEK', 'ACCOUNT CAP', 'AVAILABLE UNTIL', 'INTERESTS', 'INDUSTRY EXPERIENCE', 'TOOLS'] as const;
+export const PROFILE_COLUMNS = ['NAME', 'HOURS PER WEEK', 'ACCOUNT CAP', 'AVAILABLE UNTIL', 'AWAY', 'INTERESTS', 'INDUSTRY EXPERIENCE', 'TOOLS'] as const;
 export const INDUSTRY_COLUMNS = ['ACCOUNT', 'INDUSTRIES'] as const;
 const list = (value: string) => value.split(/[,;\n]/).map(v => v.trim()).filter(Boolean);
 
@@ -56,7 +58,7 @@ export function profilesFromWorkbook(workbook: ExcelJS.Workbook, source: string)
       if (!at('NAME')) return;
       const number = (name: string) => at(name) === '' ? undefined : Number(at(name));
       const parsed = profilesSchema.shape.researchers.element.safeParse({
-        name: at('NAME'), interests: list(at('INTERESTS')), industryExperience: list(at('INDUSTRY EXPERIENCE')), tools: list(at('TOOLS')),
+        name: at('NAME'), away: list(at('AWAY')), interests: list(at('INTERESTS')), industryExperience: list(at('INDUSTRY EXPERIENCE')), tools: list(at('TOOLS')),
         ...(number('HOURS PER WEEK') !== undefined && { hoursPerWeek: number('HOURS PER WEEK') }),
         ...(number('ACCOUNT CAP') !== undefined && { accountCap: number('ACCOUNT CAP') }),
         ...(at('AVAILABLE UNTIL') && { availableUntil: at('AVAILABLE UNTIL').slice(0, 10) }),
@@ -71,7 +73,7 @@ export function profilesFromWorkbook(workbook: ExcelJS.Workbook, source: string)
 /** The same sheets, for keeping profiles in the workbook (or a separate file) instead of JSON. */
 export function profileSheets(workbook: ExcelJS.Workbook, profiles?: Profiles) {
   workbook.addWorksheet('Profiles').addRows([[...PROFILE_COLUMNS], ...(profiles?.researchers ?? []).map(p => [p.name, p.hoursPerWeek ?? '', p.accountCap ?? '',
-    p.availableUntil ?? '', p.interests.join(', '), p.industryExperience.join(', '), p.tools.join(', ')])]);
+    p.availableUntil ?? '', p.away.join('; '), p.interests.join(', '), p.industryExperience.join(', '), p.tools.join(', ')])]);
   workbook.addWorksheet('Account Industries').addRows([[...INDUSTRY_COLUMNS], ...Object.entries(profiles?.accounts ?? {}).map(([name, tags]) => [name, tags.join(', ')])]);
   return workbook;
 }
