@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ScoringConfig } from '../recommendations/models.js';
-import { recommendForPeriod } from '../pilot/capacity.js';
+import { awayConflicts, recommendForPeriod } from '../pilot/capacity.js';
 import { dateSchema, datedResearcherSchema, type DatedResearcher, type DatedRun } from '../pilot/models.js';
 import { inSlots } from '../pilot/units.js';
 import { clean, slug, type GridMember, type ParsedWorkbook, type RosterMember } from './parse.js';
@@ -8,6 +8,8 @@ import { accountIndustries, type Profile, type Profiles } from './profiles.js';
 
 export const workbookSettingsSchema = z.object({
   maxAccounts: z.number().int().positive(),
+  // Official term dates ("Spring 2027": [first day of classes, last day of finals]) used to read away terms.
+  terms: z.record(z.string(), z.tuple([dateSchema, dateSchema])).default({}),
   // The grid has no assignment dates; checked accounts are assumed to run for this window.
   assignmentStart: dateSchema, assignmentEnd: dateSchema,
 }).strict().refine(s => s.assignmentStart <= s.assignmentEnd, 'Invalid assignment window');
@@ -26,6 +28,19 @@ const term = (value: string) => /^(spring|summer|fall)\s+(\d{4})$/i.exec(clean(v
 const graduationDate = (value: string) => { const t = term(value); return t ? `${t[2]}-${{ spring: '05-15', summer: '08-15', fall: '12-15' }[t[1]!.toLowerCase()]}` : undefined; };
 const hireDate = (value: string) => { const t = term(value); return t ? `${t[2]}-${{ spring: '01-01', summer: '05-01', fall: '08-01' }[t[1]!.toLowerCase()]}` : undefined; };
 const roleTag = (role: string) => /manager/i.test(role) ? 'manager' : /analyst/i.test(role) ? 'analyst' : /strategist|lead researcher/i.test(role) ? 'strategist' : undefined;
+// Approximate term spans, wider than any UF term, for terms missing from the configured calendar.
+const roughTerm = { spring: ['01-01', '05-15'], summer: ['05-01', '08-15'], fall: ['08-01', '12-20'] } as const;
+/** Read one away entry: a configured term, a term outside the calendar (approximate, warned), or an explicit date range. */
+function awayPeriod(entry: string, terms: WorkbookSettings['terms']): { from: string; until: string; approximate?: boolean } | undefined {
+  const known = Object.entries(terms).find(([name]) => clean(name).toLowerCase() === clean(entry).toLowerCase());
+  if (known) return { from: known[1][0], until: known[1][1] };
+  const range = /^(\d{4}-\d{2}-\d{2})\s+(?:to|through|–)\s+(\d{4}-\d{2}-\d{2})$/i.exec(clean(entry));
+  if (range) return range[1]! <= range[2]! ? { from: range[1]!, until: range[2]! } : undefined;
+  const t = term(entry);
+  if (!t) return undefined;
+  const [from, until] = roughTerm[t[1]!.toLowerCase() as keyof typeof roughTerm];
+  return { from: `${t[2]}-${from}`, until: `${t[2]}-${until}`, approximate: true };
+}
 function distance(a: string, b: string) {
   const d = Array.from({ length: b.length + 1 }, (_, i) => i);
   for (let i = 1; i <= a.length; i++) {
@@ -86,16 +101,25 @@ export function workbookResearchers(parsed: ParsedWorkbook, settings: WorkbookSe
     // Like conflicting graduation dates, the earlier end wins: it can only under-recommend.
     const until = profile?.availableUntil && profile.availableUntil < candidates[0]! ? profile.availableUntil : candidates[0]!;
     if (until !== candidates[0]) warnings.push(`${name}: available until ${until} per their 1:1, before graduation`);
+    const away = (profile?.away ?? []).map(entry => ({ entry, period: awayPeriod(entry, settings.terms) }));
+    const unreadable = away.filter(a => !a.period).map(a => a.entry);
+    // An unreadable away entry could hide an absence, so the researcher is held back rather than guessed about.
+    if (unreadable.length) { exclude(name, `1:1 away entry unreadable: ${unreadable.map(e => `"${e}"`).join(', ')}; use a term such as "Spring 2027" or "YYYY-MM-DD to YYYY-MM-DD"`); continue; }
+    for (const a of away) if (a.period!.approximate) warnings.push(`${name}: away "${a.entry}" is not in the configured term calendar; using ${a.period!.from} to ${a.period!.until}`);
     const cap = asked === undefined ? settings.maxAccounts : Math.min(settings.maxAccounts, Math.max(asked, load));
     const parsedResearcher = datedResearcherSchema.safeParse({
       id: slug(name), name, active: true, weeklyCapacityHours: cap, maxAccounts: cap,
       skills: [role, ...(profile?.tools ?? [])], experienceYears: Math.max(0, Math.round((Date.parse(asOf) - Date.parse(hire)) / 3.15576e9) / 10),
       interests: profile?.interests ?? [], industryExperienceIds: profile?.industryExperience ?? [], availableFrom: hire, availableUntil: until,
+      ...(away.length ? { away: away.map(a => ({ from: a.period!.from, until: a.period!.until })) } : {}),
       ...(profile ? { profile: { ...(profile.hoursPerWeek !== undefined && { hoursPerWeek: profile.hoursPerWeek }), ...(asked !== undefined && { accountCap: Math.min(asked, settings.maxAccounts) }) } } : {}),
       assignments: accountIds.map(accountId => ({ id: `${slug(name)}_${accountId}`, accountId, startDate: settings.assignmentStart,
         endDate: settings.assignmentEnd, hoursPerWeek: 1, status: 'active', source: 'workbook' })),
     });
-    if (parsedResearcher.success) researchers.push(parsedResearcher.data);
+    if (parsedResearcher.success) {
+      researchers.push(parsedResearcher.data);
+      for (const c of awayConflicts(parsedResearcher.data)) warnings.push(`${name}: on ${parsed.accounts.get(c.accountId) ?? c.accountId} until ${c.assignmentEnd} but away ${c.from} to ${c.until}`);
+    }
     else exclude(name, ...parsedResearcher.error.issues.map(i => i.message));
   }
   if (profiles) {
