@@ -39,12 +39,18 @@ export function overloads(r: DatedResearcher) {
   return found;
 }
 
+const profileFacts = (profile: DatedResearcher['profile']) => !profile ? ['no 1:1 profile on file'] : [
+  ...(profile.hoursPerWeek !== undefined ? [`reported about ${profile.hoursPerWeek} hours/week on The Agency at their 1:1`] : []),
+  ...(profile.accountCap !== undefined ? [`asked for at most ${profile.accountCap} account${profile.accountCap === 1 ? '' : 's'}`] : []),
+];
+
 /** Separate dated boundary; never interpret old snapshot totals as a schedule. */
 export function recommendForPeriod(rawResearchers: unknown[], rawRequest: unknown, config: ScoringConfig): DatedRun {
   const request = datedRequestSchema.parse(rawRequest);
   const { startDate: _start, endDate: _end, ...legacyRequest } = request;
-  const excluded: DatedRun['excluded'] = [], snapshots: unknown[] = [];
+  const excluded: DatedRun['excluded'] = [], snapshots: unknown[] = [], profiles = new Map<string, DatedResearcher['profile']>();
   const counts = new Map<string, number>();
+  let profiled = false;
   for (const raw of rawResearchers) {
     const id = raw && typeof raw === 'object' && 'id' in raw ? String(raw.id).trim() : '';
     if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
@@ -56,8 +62,13 @@ export function recommendForPeriod(rawResearchers: unknown[], rawRequest: unknow
       excluded.push({ researcherId: rawId, dataIssue: true, reasons: !parsed.success ? parsed.error.issues.map(i => i.message) : ['Conflicting duplicate researcher ID'] }); continue;
     }
     const r = parsed.data, capacity = capacityForPeriod(r, request);
-    if (capacity.reasons.length) { excluded.push({ researcherId: r.id, dataIssue: false, reasons: capacity.reasons }); continue; }
-    const { assignments: _assignments, availableFrom: _from, availableUntil: _until, ...profile } = r;
+    profiled ||= r.profile !== undefined;
+    if (capacity.reasons.length) {
+      if (r.profile?.accountCap !== undefined && capacity.reasons.some(x => /available on|Maximum account load/.test(x))) capacity.reasons.push(`Asked for at most ${r.profile.accountCap} account${r.profile.accountCap === 1 ? '' : 's'} at their 1:1`);
+      excluded.push({ researcherId: r.id, dataIssue: false, reasons: capacity.reasons }); continue;
+    }
+    profiles.set(r.id, r.profile);
+    const { assignments: _assignments, availableFrom: _from, availableUntil: _until, profile: _profile, ...profile } = r;
     // Synthetic slot IDs represent the peak simultaneous count, never a union of non-overlapping accounts.
     snapshots.push({ ...profile, committedHours: r.weeklyCapacityHours - capacity.minFreeHours,
       currentAccountIds: Array.from({ length: capacity.maxAccounts }, (_, i) => `capacity-slot-${i}`) });
@@ -68,6 +79,8 @@ export function recommendForPeriod(rawResearchers: unknown[], rawRequest: unknow
   if (excluded.some(e => e.dataIssue) && !warnings.some(w => w.includes('incomplete'))) warnings.push('Some researcher records are incomplete or conflicting; manager review is required.');
   const retained = run.retained.map(candidate => {
     const facts = candidate.facts.map((fact, i) => i === 0 ? `At least ${candidate.remainingHours} hours/week available throughout ${request.startDate} to ${request.endDate}; request needs ${request.hoursPerResearcher}` : i === 4 ? `${fact.replace('currently used', 'used at peak')} during the requested period` : fact);
+    // Only workbook namespaces seeded with 1:1 profiles mention them.
+    if (profiled) facts.push(...profileFacts(profiles.get(candidate.researcherId)));
     return { ...candidate, facts, explanation: facts.join('; ') + '.' };
   });
   return { ...run, request, retained, displayed: retained.slice(0, config.displayCount), excluded: [...excluded, ...run.excluded], warnings };
