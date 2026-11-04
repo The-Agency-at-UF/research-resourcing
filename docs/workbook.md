@@ -32,8 +32,37 @@ Row and header colours (status legend, confirmed/waiting) are not read: the colo
 
 Open questions for Research: whether checked accounts span the whole semester, whether Analyst and Data Analyst are interchangeable, and whether Lead Researchers count as strategists.
 
-Scoring uses `config/scoring-workbook.json`. Account load has weight 0 because slots already drive bandwidth; skills, interests, and industry stay inactive until Research records them.
+Scoring uses `config/scoring-workbook.json`. Account load has weight 0 because slots already drive bandwidth. Interests, industry, and tools count only when 1:1 profiles are imported.
+
+## 1:1 profiles
+
+The workbook's Interests and Dream Job columns are empty, so interests, industries, and tools come from researcher 1:1s. Those notes are personal (career plans, outside jobs, feedback), so only staffing facts are imported, from a hand-reviewed file in ignored `data/private/profiles.json`. The schema refuses any other field, so free-text notes cannot be imported.
+
+```json
+{
+  "source": "Researcher 1:1s, Fall 2026",
+  "accounts": { "Fictional Screening Co": ["entertainment", "media"] },
+  "researchers": [
+    { "name": "Roster Name", "hoursPerWeek": 4, "accountCap": 2, "availableUntil": "2026-12-11",
+      "interests": ["entertainment"], "industryExperience": ["media"], "tools": ["quid"] }
+  ]
+}
+```
+
+| Field | Effect |
+|---|---|
+| `accounts` | Industry tags per grid account. The request's interests are all of them, and the first is the primary industry compared with `industryExperience`. Untagged accounts score neither, and say so. |
+| `interests` | Preferred post-grad industries. Scored against the account's tags (weight 0.08). |
+| `industryExperience` | Industries from internships and jobs. Scored against the primary industry (weight 0.05). |
+| `tools` | Tools they already use. Offered as optional "helpful tools" on the request form. A match raises the skills score and never excludes anyone. |
+| `accountCap` | Most accounts they asked to hold. Lowers their slots below the department cap. A cap below current load is held at the load, with a warning, so nothing new is added and no overbooking is reported. |
+| `availableUntil` | Leaving or studying away before graduation. The earlier date wins, with a warning. |
+| `hoursPerWeek` | Shown to managers only. Capacity stays in account slots. |
+
+Names match the roster as grid rows do, including `workbook-aliases.json`. Unmatched profiles and researchers with no profile are listed in the import warnings. A missing profile scores zero on interests and industry, so researchers without 1:1s rank slightly lower when an account is tagged. Bandwidth is measured against each person's own cap, so someone who asked for one account and has none counts as fully free.
+
+Tags are slugged, so "Food and Beverage" becomes `food-and-beverage`. Keep one vocabulary across accounts and people. Try it with the fictional data: `npm run workbook -- --sample --sample-profiles`. With real files: `npm run workbook -- ~/Downloads/research.xlsx fixtures/workbook-request.json --profiles data/private/profiles.json`, or seed with `npm run pilot:seed -- --workbook <xlsx> --profiles data/private/profiles.json`.
 
 ## Not yet covered
 
-Skills, research-type interests, industry and internship experience, and previous accounts are not in the workbook. Live Microsoft Graph reads, writing approvals back, and seeding the DynamoDB pilot from the workbook are later steps.
+Previous accounts and research-type preferences are not recorded anywhere. Live Microsoft Graph reads and writing approvals back are later steps.

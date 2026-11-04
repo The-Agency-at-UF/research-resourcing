@@ -53,7 +53,7 @@ const plainInput = (blockId: string, label: string, initial: string, max: number
 const issueCount = (report?: ImportReport) => (report?.warnings.length ?? 0) + (report?.excluded.length ?? 0);
 
 /** "N strategists or analysts for account X, from date to date." */
-export function pilotRequestModal(accounts: Account[], requestId: string = randomUUID(), issues = 0, fictional = true): types.ModalView {
+export function pilotRequestModal(accounts: Account[], requestId: string = randomUUID(), issues = 0, fictional = true, tools: string[] = []): types.ModalView {
   if (!accounts.length) return modal('Pilot staffing request', [section('No accounts are configured in this pilot namespace.')], undefined, '{}', fictional);
   return modal('Pilot staffing request', [
     ...(issues ? [section(`${issues} workbook import issue(s) may affect these recommendations. Review them with /resource-pilot issues.`)] : []),
@@ -62,6 +62,9 @@ export function pilotRequestModal(accounts: Account[], requestId: string = rando
     plainInput('openings', 'Number of openings', '1', 2),
     datepicker('startDate', 'Start date (inclusive)'), datepicker('endDate', 'End date (inclusive)'),
     plainInput('minimumExperienceYears', 'Minimum years since hire', '0', 4, true),
+    // Tools come from imported 1:1 profiles; they rank candidates and never exclude anyone.
+    ...(tools.length ? [{ type: 'input' as const, block_id: 'tools', optional: true, label: text('Helpful tools (ranks, never excludes)'), element: {
+      type: 'multi_static_select' as const, action_id: 'value', max_selected_items: 5, options: tools.slice(0, 100).map(t => ({ text: text(t.slice(0, 75)), value: t })) } }] : []),
   ], PILOT_REQUEST, JSON.stringify({ requestId }), fictional);
 }
 export function parsePilotForm(values: ViewOutput['state']['values']): { ok: true; request: DatedRequest } | { ok: false; errors: Record<string, string> } {
@@ -75,15 +78,16 @@ export function parsePilotForm(values: ViewOutput['state']['values']): { ok: tru
   if (!Number.isFinite(minimumExperienceYears)) errors.minimumExperienceYears = 'Enter zero or a positive number of years.';
   if (Object.keys(errors).length) return { ok: false, errors };
   // One capacity unit per opening: an account slot for workbook data.
+  const preferredSkills = (field(values, 'tools')?.selected_options ?? []).map(o => o.value).slice(0, 5);
   const dated = datedRequestSchema.safeParse({ accountId, accountName: 'Selected account', hoursPerResearcher: 1, openings, requiredSkills: [role],
-    preferredSkills: [], minimumExperienceYears, careerInterests: [],
+    preferredSkills, minimumExperienceYears, careerInterests: [],
     startDate: field(values, 'startDate')?.selected_date ?? '', endDate: field(values, 'endDate')?.selected_date ?? '' });
   if (!dated.success) return { ok: false, errors: Object.fromEntries(dated.error.issues.map(i => [String(i.path[0]), i.message])) };
   return { ok: true, request: dated.data };
 }
 export function selectionModal(requestId: string, runId: string, record: RunState, requestVersion: number, fictional = true) {
   const run = record.run;
-  const blocks: types.ModalView['blocks'] = [section(`${run.request.accountName}\n${run.request.startDate} to ${run.request.endDate}\nRole: ${run.request.requiredSkills.join(', ')}; ${run.request.openings} opening(s) remain.\nRequest: ${requestId}`),
+  const blocks: types.ModalView['blocks'] = [section(`${run.request.accountName}\n${run.request.startDate} to ${run.request.endDate}\nRole: ${run.request.requiredSkills.join(', ')}; ${run.request.openings} opening(s) remain.${run.request.careerInterests.length ? `\nIndustry: ${run.request.careerInterests.join(', ')}` : ''}${run.request.preferredSkills.length ? `\nHelpful tools: ${run.request.preferredSkills.join(', ')}` : ''}\nRequest: ${requestId}`),
     ...run.displayed.map(r => section(`${r.rank}. ${r.name} — ${r.score.toFixed(1)}\n${r.explanation}`)), ...run.warnings.map(section)];
   if (run.excluded.length) blocks.push(...sections(`Exclusions:\n${run.excluded.map(e => `${e.researcherId}: ${e.reasons.join('; ')}`).join('\n')}`));
   blocks.push({ type: 'input', block_id: 'decision', label: text('Decision'), element: { type: 'static_select', action_id: 'value', initial_option: { text: text('Review candidate selection'), value: 'approve' }, options: [
@@ -206,7 +210,7 @@ export async function runPilotJob(job: PilotJob, client: SlackCalls, service: Pi
     if (job.kind === 'command') {
       await s.authorize(who);
       const action = job.text.trim(), keyword = action.toLowerCase();
-      if (!action) result = pilotRequestModal(await s.accounts(who), undefined, issueCount(await s.importReport(who)), fictional);
+      if (!action) { const report = await s.importReport(who); result = pilotRequestModal(await s.accounts(who), undefined, issueCount(report), fictional, report?.tools); }
       else if (keyword === 'help') result = view('Staffing pilot help', sections(help));
       else if (keyword === 'hq') result = view('Resourcing HQ', sections(resourcingText(await s.roster(who), s.today(), s.units, label(fictional))));
       else if (keyword === 'issues') result = issuesModal(await s.importReport(who), fictional);
@@ -226,7 +230,9 @@ export async function runPilotJob(job: PilotJob, client: SlackCalls, service: Pi
         requestId = ref(meta(), 'requestId');
         const account = (await s.accounts(who)).find(a => a.id === parsed.request.accountId);
         if (!account) throw new PilotError('invalid', 'Choose a configured account.');
-        await s.createRequest(who, { ...parsed.request, accountName: account.name }, requestId);
+        // The account's industry tags (from the 1:1 profile file) score interests; the first is the primary industry.
+        const industries = account.industries ?? [];
+        await s.createRequest(who, { ...parsed.request, accountName: account.name, careerInterests: industries, ...(industries[0] && { industryId: industries[0] }) }, requestId);
         result = await showRecommendations(requestId);
       } else if (job.callback === PILOT_RESUME) {
         result = await showRecommendations(field(values, 'request')?.selected_option?.value ?? '');

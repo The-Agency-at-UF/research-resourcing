@@ -1,7 +1,8 @@
 import type { ScoringConfig } from '../recommendations/models.js';
 import type { ParsedWorkbook } from '../workbook/parse.js';
-import { workbookResearchers, type WorkbookSettings } from '../workbook/researchers.js';
-import { datedResearcherSchema, type DatedResearcher, type ImportReport, type SeedInfo } from './models.js';
+import type { Profiles } from '../workbook/profiles.js';
+import { requestIndustries, workbookResearchers, type WorkbookSettings } from '../workbook/researchers.js';
+import { datedResearcherSchema, type Account, type DatedResearcher, type ImportReport, type SeedInfo } from './models.js';
 import type { PilotStore, Row } from './store.js';
 
 // Pilot permissions only; never a production allowlist.
@@ -32,14 +33,17 @@ export function pilotSeed(config: ScoringConfig): Row[] {
 
 /** Seed from the Research workbook: researchers in account slots, grid accounts, and the import report shown to managers in Slack. */
 export function workbookSeed(parsed: ParsedWorkbook, settings: WorkbookSettings, config: ScoringConfig,
-  options: { source: string; fictional: boolean; asOf: string; aliases?: Record<string, string> }): Row[] {
-  const { researchers, excluded, warnings } = workbookResearchers(parsed, settings, options.asOf, options.aliases);
+  options: { source: string; fictional: boolean; asOf: string; aliases?: Record<string, string>; profiles?: Profiles }): Row[] {
+  const { researchers, excluded, warnings, tools } = workbookResearchers(parsed, settings, options.asOf, options.aliases, options.profiles);
   return [
     { key: 'SEED', version: 1, data: { fictional: options.fictional, schemaVersion: 2, source: options.source, capacity: 'account-slots', maxAccounts: settings.maxAccounts } satisfies SeedInfo },
     { key: 'CONFIG', version: 1, data: config },
-    { key: 'IMPORT', version: 1, data: { source: options.source, importedAt: options.asOf, warnings,
-      excluded: excluded.map(({ researcherId, reasons }) => ({ researcherId, reasons })) } satisfies ImportReport },
-    ...[...parsed.accounts].map(([id, name]) => ({ key: `ACCOUNT#${id}`, version: 1, data: { id, name } })),
+    { key: 'IMPORT', version: 1, data: { source: options.profiles ? `${options.source} + ${options.profiles.source}` : options.source, importedAt: options.asOf, warnings,
+      excluded: excluded.map(({ researcherId, reasons }) => ({ researcherId, reasons })), tools } satisfies ImportReport },
+    ...[...parsed.accounts].map(([id, name]) => {
+      const { careerInterests: industries } = requestIndustries(id, options.profiles);
+      return { key: `ACCOUNT#${id}`, version: 1, data: { id, name, ...(industries.length && { industries }) } satisfies Account };
+    }),
     ...managerRows(), ...researchers.map(r => ({ key: `RESEARCHER#${r.id}`, version: 1, data: r })),
   ];
 }
