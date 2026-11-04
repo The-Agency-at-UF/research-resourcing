@@ -4,6 +4,8 @@ import { datedRequestSchema, PilotError, type Account, type Actor, type DatedReq
 import { metricsText, resourcingText } from '../pilot/reports.js';
 import type { PilotService } from '../pilot/service.js';
 import { amount, HOURS, type CapacityUnits } from '../pilot/units.js';
+import type { ScoringConfig } from '../recommendations/models.js';
+import type { WorkbookUpload } from '../workbook/upload.js';
 
 export interface PilotOptions {
   /** Slack user or channel IDs told about approved and changed assignments (operations managers). */
@@ -13,6 +15,13 @@ export interface PilotOptions {
   /** False once real workbook data is seeded; changes the label on every screen. */
   fictional?: boolean;
   log?: (message: string) => void;
+  /**
+   * Workbook uploads (`/resource-pilot import`), injected so the receiver bundle never loads the Excel parser. The scoring policy
+   * is used only to initialize an empty namespace.
+   */
+  workbook?: { read: WorkbookUpload; maxAccounts: number; config: ScoringConfig };
+  /** Test hook; by default files are fetched from files.slack.com with the bot token. */
+  download?: (url: string) => Promise<ArrayBuffer>;
 }
 const text = (value: string) => ({ type: 'plain_text' as const, text: value.slice(0, 2900) });
 const section = (value: string) => ({ type: 'section' as const, text: text(value) });
@@ -33,7 +42,8 @@ const modal = (title: string, blocks: types.ModalView['blocks'], callback?: stri
   ...(callback ? { callback_id: callback, private_metadata: metadata, submit: text('Continue') } : {}),
 });
 export const PILOT_REQUEST = 'resource_pilot_request', PILOT_SELECT = 'resource_pilot_select', PILOT_CONFIRM = 'resource_pilot_confirm',
-  PILOT_RESUME = 'resource_pilot_resume', PILOT_CHANGE = 'resource_pilot_change';
+  PILOT_RESUME = 'resource_pilot_resume', PILOT_CHANGE = 'resource_pilot_change', PILOT_IMPORT = 'resource_pilot_import', PILOT_IMPORT_APPLY = 'resource_pilot_import_apply';
+const MAX_UPLOAD = 10 * 1024 * 1024;
 const metadata = (view: { private_metadata: string }): Record<string, string | number> => {
   try { const value = JSON.parse(view.private_metadata); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); return value; }
   catch { throw new PilotError('invalid', 'Invalid form. Reopen /resource-pilot.'); }
@@ -118,22 +128,54 @@ export function changeModal(assignments: AssignmentOption[], fictional = true) {
 export function issuesModal(report: ImportReport | undefined, fictional = true) {
   if (!report || !issueCount(report)) return modal('Workbook import issues', [section(report ? `No issues recorded for ${report.source} (imported ${report.importedAt}).` : 'No workbook import is recorded in this pilot namespace.')], undefined, '{}', fictional);
   return modal('Workbook import issues', sections([
-    `Source: ${report.source}, imported ${report.importedAt}. Correct the workbook and re-import into a new namespace to clear these.`,
+    `Source: ${report.source}, imported ${report.importedAt}. Correct the workbook and upload it again with /resource-pilot import to clear these.`,
     report.excluded.length ? `\nExcluded from recommendations (${report.excluded.length}):\n${report.excluded.map(e => `- ${e.researcherId}: ${e.reasons.join('; ')}`).join('\n')}` : '',
     report.warnings.length ? `\nWarnings (${report.warnings.length}):\n${report.warnings.map(w => `- ${w}`).join('\n')}` : '',
   ].filter(Boolean).join('\n')), undefined, '{}', fictional);
 }
+export function importModal(fictional = true) {
+  return modal('Update from workbook', [
+    section('Upload the Research Resourcing workbook (.xlsx). Profiles and Account Industries sheets are optional and may be in the same file or a second one. You will see every change before anything is saved.'),
+    { type: 'input', block_id: 'files', label: text('Workbook files'), element: { type: 'file_input', action_id: 'value', filetypes: ['xlsx'], max_files: 2 } },
+    section('Pilot approvals and assignment changes made in Slack are kept. Upload only staffing data: never 1:1 notes.'),
+  ], PILOT_IMPORT, '{}', fictional);
+}
+export function importPreviewModal(preview: { draftId: string; hash: string; lines: string[]; initial: boolean }, fictional = true, note?: string) {
+  return { ...modal('Review workbook update', [...(note ? [section(note)] : []), ...sections(preview.lines.join('\n')),
+    section(preview.initial ? 'Initializing writes every record above. Nothing is saved until you apply.' : 'Nothing is saved until you apply. If the pilot changes first, you will see an updated preview.'),
+  ], PILOT_IMPORT_APPLY, JSON.stringify({ draftId: preview.draftId, hash: preview.hash }), fictional), submit: text(preview.initial ? 'Initialize pilot' : 'Apply update') };
+}
+type Upload = { name: string; url_private_download?: string; size?: number; filetype?: string };
+function uploadErrors(values: ViewOutput['state']['values']) {
+  const files = (field(values, 'files') as { files?: Upload[] } | undefined)?.files ?? [];
+  if (!files.length) return { files: 'Upload the workbook.' };
+  if (files.some(f => !/\.xlsx$/i.test(f.name))) return { files: 'Upload .xlsx files only.' };
+  if (files.some(f => (f.size ?? 0) > MAX_UPLOAD)) return { files: 'Each file must be under 10 MB.' };
+  return undefined;
+}
+/** Only Slack's file host receives the bot token; a login page instead of a workbook means the files:read scope is missing. */
+async function slackDownload(url: string, token: string | undefined): Promise<ArrayBuffer> {
+  const target = new URL(url);
+  if (target.protocol !== 'https:' || target.hostname !== 'files.slack.com') throw new PilotError('invalid', 'The upload did not come from Slack file storage.');
+  if (!token) throw new PilotError('invalid', 'The bot token is not available to download the upload.');
+  const response = await fetch(target, { headers: { Authorization: `Bearer ${token}` } });
+  if (!response.ok || (response.headers.get('content-type') ?? '').includes('text/html')) throw new PilotError('invalid', 'Slack did not return the file. The app needs the files:read scope; reinstall it after updating the manifest.');
+  const data = await response.arrayBuffer();
+  if (data.byteLength > MAX_UPLOAD) throw new PilotError('invalid', 'Each file must be under 10 MB.');
+  return data;
+}
 const help = ['/resource-pilot — new staffing request (role, openings, dates)', '/resource-pilot list — resume a saved request', '/resource-pilot <request-id> — open a request',
   '/resource-pilot assignments — cancel or change an assignment', '/resource-pilot hq — current resourcing view', '/resource-pilot issues — workbook import problems',
-  '/resource-pilot metrics — pilot measures'].join('\n');
+  '/resource-pilot metrics — pilot measures', '/resource-pilot import — update from an uploaded workbook (preview first)'].join('\n');
 
 /** The slow half of a pilot interaction: runs inline under Socket Mode, or in the worker Lambda when hosted. Plain JSON. */
 export type PilotJob =
   | { kind: 'command'; teamId: string; userId: string; text: string; viewId: string }
   | { kind: 'view'; callback: string; teamId: string; userId: string; viewId: string; privateMetadata: string; values: ViewOutput['state']['values'] };
-type SlackCalls = Pick<App['client'], 'views' | 'chat'>;
+type SlackCalls = Pick<App['client'], 'views' | 'chat'> & { token?: string | undefined };
 const loading: Record<string, string> = { [PILOT_REQUEST]: 'Loading dated recommendations…', [PILOT_RESUME]: 'Loading saved request…',
-  [PILOT_SELECT]: 'Checking current availability…', [PILOT_CONFIRM]: 'Rechecking and saving your decision…', [PILOT_CHANGE]: 'Checking and saving the change…' };
+  [PILOT_SELECT]: 'Checking current availability…', [PILOT_CONFIRM]: 'Rechecking and saving your decision…', [PILOT_CHANGE]: 'Checking and saving the change…',
+  [PILOT_IMPORT]: 'Reading the workbook and comparing it with the pilot…', [PILOT_IMPORT_APPLY]: 'Rechecking and applying the update…' };
 function changeErrors(values: ViewOutput['state']['values']) {
   const errors: Record<string, string> = {}, kind = field(values, 'change')?.selected_option?.value;
   if (!/^(.+)#(\d+)$/.test(field(values, 'assignment')?.selected_option?.value ?? '')) errors.assignment = 'Choose an assignment.';
@@ -160,8 +202,9 @@ export function registerPilotHandlers(app: Pick<App, 'command' | 'view'>, servic
   });
   const validators: Record<string, (values: ViewOutput['state']['values']) => Record<string, string> | undefined> = {
     [PILOT_REQUEST]: values => { const parsed = parsePilotForm(values); return parsed.ok ? undefined : parsed.errors; }, [PILOT_CHANGE]: changeErrors,
+    [PILOT_IMPORT]: uploadErrors,
   };
-  for (const callback of [PILOT_REQUEST, PILOT_RESUME, PILOT_SELECT, PILOT_CONFIRM, PILOT_CHANGE]) {
+  for (const callback of [PILOT_REQUEST, PILOT_RESUME, PILOT_SELECT, PILOT_CONFIRM, PILOT_CHANGE, PILOT_IMPORT, PILOT_IMPORT_APPLY]) {
     app.view(callback, async ({ body, view: submitted, ack, client }) => {
       const errors = validators[callback]?.(submitted.state.values);
       if (errors) { await ack({ response_action: 'errors', errors }); return; }
@@ -208,9 +251,11 @@ export async function runPilotJob(job: PilotJob, client: SlackCalls, service: Pi
   try {
     const s = needed();
     if (job.kind === 'command') {
-      await s.authorize(who);
       const action = job.text.trim(), keyword = action.toLowerCase();
-      if (!action) { const report = await s.importReport(who); result = pilotRequestModal(await s.accounts(who), undefined, issueCount(report), fictional, report?.tools); }
+      // Import may initialize an empty namespace, which has no manager rows yet; it checks access itself.
+      if (keyword === 'import') await s.importAllowed(who); else await s.authorize(who);
+      if (keyword === 'import') result = importModal(fictional);
+      else if (!action) { const report = await s.importReport(who); result = pilotRequestModal(await s.accounts(who), undefined, issueCount(report), fictional, report?.tools); }
       else if (keyword === 'help') result = view('Staffing pilot help', sections(help));
       else if (keyword === 'hq') result = view('Resourcing HQ', sections(resourcingText(await s.roster(who), s.today(), s.units, label(fictional))));
       else if (keyword === 'issues') result = issuesModal(await s.importReport(who), fictional);
@@ -273,6 +318,21 @@ export async function runPilotJob(job: PilotJob, client: SlackCalls, service: Pi
           : `moved from ${done.change.before.startDate}–${done.change.before.endDate} to ${done.change.after.startDate}–${done.change.after.endDate}`;
         result = view('Assignment updated', [section(`${done.researcherName} on ${done.accountName}: ${what}.${done.reopenedRequest ? `\nThe opening on request ${done.change.requestId} is open again.` : ''}`)]);
         after = async () => { await announce(`${label(fictional)}: ${done.researcherName} on ${done.accountName} ${what} by <@${who.userId}>.`); await refreshHq(); };
+      } else if (job.callback === PILOT_IMPORT) {
+        if (uploadErrors(values) || !options.workbook) throw new PilotError('invalid', options.workbook ? 'The upload form was incomplete. Reopen /resource-pilot import.' : 'Workbook import is not configured for this app.');
+        const files = (field(values, 'files') as { files: Upload[] }).files, { read, maxAccounts, config } = options.workbook;
+        const data = await Promise.all(files.map(async f => ({ name: f.name,
+          data: await (options.download ?? (url => slackDownload(url, client.token)))(f.url_private_download ?? '') })));
+        result = importPreviewModal(await s.previewImport(who, { ...await read(data, s.today()), maxAccounts, config }), fictional);
+      } else if (job.callback === PILOT_IMPORT_APPLY) {
+        const m = meta(), outcome = await s.applyImport(who, ref(m, 'draftId'), ref(m, 'hash'));
+        if (!outcome.applied) result = importPreviewModal({ draftId: ref(m, 'draftId'), hash: outcome.hash, lines: outcome.lines, initial: false }, fictional, 'The pilot changed since your preview. Review the updated changes.');
+        else {
+          const changes = outcome.lines.filter(l => !/^(Import issues|No researcher)/.test(l)).length;
+          result = view('Workbook update applied', [...sections(outcome.lines.join('\n')), section(outcome.initial
+            ? 'The pilot is initialized from this workbook. New requests use it now.' : 'Saved in DynamoDB. The workbook itself is unchanged.')]);
+          after = async () => { await announce(`${label(fictional)}: workbook update applied by <@${who.userId}> (${outcome.initial ? 'initialized' : `${changes} change${changes === 1 ? '' : 's'}`}).`); await refreshHq(); };
+        }
       } else throw new PilotError('invalid', 'Unknown pilot form. Reopen /resource-pilot.');
     }
   } catch (error) { result = failure(error, error instanceof PilotError && error.code === 'unauthorized' ? undefined : requestId); }

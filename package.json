@@ -17,7 +17,8 @@
     "test:pilot:aws": "node --env-file=.env.pilot --import tsx --test tests/pilot-aws.integration.ts",
     "workbook": "tsx src/workbook-demo.ts",
     "pilot:metrics": "node --env-file=.env.pilot --import tsx src/scripts/pilot-metrics.ts",
-    "build:hosted": "node scripts/build-hosted.mjs"
+    "build:hosted": "node scripts/build-hosted.mjs",
+    "profiles:sheet": "tsx src/scripts/profiles-sheet.ts"
   },
   "repository": {
     "type": "git",

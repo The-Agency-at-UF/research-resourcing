@@ -64,7 +64,7 @@ test('the seed stores account industries and tools; the Slack form offers tools 
   assert.equal((byKey.get('ACCOUNT#internal-comms') as Account).industries, undefined);
   assert.equal((byKey.get('IMPORT') as ImportReport).source, 'sample + fictional sample 1:1s');
 
-  const h = await harness({}, undefined, profiles);
+  const h = await harness({}, undefined, { profiles });
   await h.command('');
   const form = h.views.at(-1);
   const toolBlock = form.blocks.find((b: any) => b.block_id === 'tools');

@@ -2,8 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { configSchema, type ScoringConfig } from '../recommendations/models.js';
 import { capacityForPeriod, recommendForPeriod } from './capacity.js';
 import { dateSchema, datedRequestSchema, datedResearcherSchema, PilotError, type Account, type Actor, type Approval, type Assignment, type Change,
-  type DatedResearcher, type HqLocation, type ImportReport, type Manager, type RequestState, type Review, type RunState } from './models.js';
+  type DatedResearcher, type HqLocation, type ImportReport, type Manager, type RequestState, type Review, type RunState, type SeedInfo } from './models.js';
+import { planImport, type CurrentState, type ImportDraft } from './import.js';
 import { computeMetrics } from './reports.js';
+import { PILOT_MANAGERS, seedFrom, seedRows } from './seed.js';
 import { ConflictError, type Check, type PilotStore, type Row } from './store.js';
 import { HOURS, inSlots, type CapacityUnits } from './units.js';
 
@@ -198,6 +200,65 @@ export class PilotService {
     catch (error) { if (error instanceof ConflictError) return false; throw error; }
   }
   async metrics(actor: Actor) { await this.authorize(actor); return computeMetrics(await this.store.list('')); }
+  /**
+   * Who may import, and whether the upload initializes an empty namespace. An empty namespace has no manager rows yet, so the
+   * bundled pilot managers may initialize it. Fictional namespaces refuse real uploads so their labels never mislead.
+   */
+  private async importAccess(actor: Actor) {
+    const [seedRow, managerRow] = await this.store.getMany(['SEED', this.managerKey(actor)]);
+    if (!seedRow) {
+      if (!PILOT_MANAGERS.some(m => m.id === actor.userId)) throw new PilotError('unauthorized', 'Only configured pilot managers may use this workflow.');
+      return { initial: true as const };
+    }
+    const manager = this.validateManager(managerRow), seed = seedRow.data as SeedInfo;
+    if (seed.fictional !== false) throw new PilotError('invalid', 'This pilot namespace holds fictional sample data, so a real workbook cannot be imported into it. Point the app at an empty namespace and import there.');
+    if (seed.capacity !== 'account-slots') throw new PilotError('invalid', 'This namespace was not seeded from the Research workbook.');
+    return { initial: false as const, manager };
+  }
+  async importAllowed(actor: Actor) { return (await this.importAccess(actor)).initial; }
+  private async currentState(): Promise<CurrentState> {
+    const [researchers, accounts, report, changes] = await Promise.all([this.store.list<DatedResearcher>('RESEARCHER#'), this.store.list<Account>('ACCOUNT#'),
+      this.store.get<ImportReport>('IMPORT'), this.store.list<Change>('CHANGE#')]);
+    return { researchers, accounts, ...(report && { report }), changedAssignmentIds: new Set(changes.map(c => c.data.assignmentId)) };
+  }
+  private initialPlan(draft: ImportDraft) {
+    const lines = [`Initialize this empty namespace from ${draft.fileNames.join(' and ')}: ${draft.researchers.length} researchers, ${draft.accounts.length} accounts.`,
+      `Import issues: ${draft.report.excluded.length} excluded, ${draft.report.warnings.length} warning(s). Review them with /resource-pilot issues.`,
+      `Pilot managers: ${PILOT_MANAGERS.map(m => m.name).join(', ')}.`];
+    return { lines, hash: lines.join('\n') };
+  }
+  /** Store the parsed upload and describe what applying it would change. Nothing else is written. */
+  async previewImport(actor: Actor, input: Omit<ImportDraft, 'uploadedBy' | 'createdAt' | 'appliedAt'>) {
+    const access = await this.importAccess(actor), draftId = randomUUID();
+    const draft: ImportDraft = { ...input, uploadedBy: actor.userId, createdAt: this.clock().toISOString() };
+    const plan = access.initial ? this.initialPlan(draft) : planImport(draft, await this.currentState());
+    await this.write([{ key: `IMPORTDRAFT#${draftId}`, version: 1, data: draft }], [{ key: `IMPORTDRAFT#${draftId}`, version: null }]);
+    return { draftId, initial: access.initial, lines: plan.lines, hash: plan.hash };
+  }
+  /**
+   * Apply a previewed upload in one conditional transaction, only if it would still make exactly the reviewed changes; otherwise
+   * return the new preview. Approvals or changes made since the preview conflict on their researcher versions.
+   */
+  async applyImport(actor: Actor, draftId: string, hash: string): Promise<{ applied: true; lines: string[]; initial: boolean } | { applied: false; lines: string[]; hash: string }> {
+    const access = await this.importAccess(actor);
+    const row = required<ImportDraft>(await this.store.get(`IMPORTDRAFT#${id(draftId)}`)), draft = row.data;
+    if (draft.uploadedBy !== actor.userId) throw new PilotError('unauthorized', 'This import belongs to another manager.');
+    if (draft.appliedAt) throw new PilotError('closed', `This upload was already applied at ${draft.appliedAt}.`);
+    const done = next(row, { ...draft, appliedAt: this.clock().toISOString() });
+    if (access.initial) {
+      const plan = this.initialPlan(draft);
+      if (plan.hash !== hash) return { applied: false, ...plan };
+      await seedRows(this.store, seedFrom(draft, draft.maxAccounts, draft.config, false, draft.report.source), key => key.startsWith('IMPORTDRAFT#'));
+      await this.write([done], [check(row)]);
+      return { applied: true, lines: plan.lines, initial: true };
+    }
+    const plan = planImport(draft, await this.currentState());
+    if (plan.hash !== hash) return { applied: false, lines: plan.lines, hash: plan.hash };
+    const checks = [...plan.checks, check(row), check(access.manager)];
+    if (plan.puts.length + 1 + 1 > 100) throw new PilotError('invalid', `This upload changes ${plan.puts.length} records, more than one atomic update allows. Seed a new namespace from it with npm run pilot:seed instead.`);
+    await this.write([...plan.puts, done], checks);
+    return { applied: true, lines: plan.lines, initial: false };
+  }
   hqLocation() { return this.store.get<HqLocation>('HQ'); }
   async saveHqLocation(location: HqLocation, previous?: Row<HqLocation>) {
     await this.write([previous ? next(previous, location) : { key: 'HQ', version: 1, data: location }], [previous ? check(previous) : { key: 'HQ', version: null }]);

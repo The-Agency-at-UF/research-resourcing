@@ -18,9 +18,11 @@ Cost at this usage is effectively zero (Lambda requests, DynamoDB on-demand, 30-
    read -rs SECRET && aws ssm put-parameter --profile research-resourcing-dev --region us-east-2 --type SecureString --name /research-resourcing/pilot/SLACK_SIGNING_SECRET --value "$SECRET"; unset SECRET
    ```
 
-2. **Point the Slack app at the request URL.** In the app's **App Manifest** page, paste `infra/slack-manifest.hosted.json` (Socket Mode off; commands and interactivity use the URL), save, and reinstall if Slack asks. The app-level `xapp-` token is not used in this mode.
+2. **Point the Slack app at the request URL.** In the app's **App Manifest** page, paste `infra/slack-manifest.hosted.json` (Socket Mode off; commands and interactivity use the URL; `files:read` for workbook uploads), save, and reinstall when Slack asks. The app-level `xapp-` token is not used in this mode.
 
 3. **Optional notices and HQ:** redeploy with `PilotNotify` (comma-separated Slack IDs) and `PilotHqChannel` parameter overrides, and invite the bot to that channel.
+
+4. **Real data:** redeploy with `PilotNamespace=<new empty namespace>`, such as `workbook-fall26-v1`. Then a pilot manager runs `/resource-pilot import` and uploads the workbook to initialize it. Later uploads update it. See [updating from the workbook](pilot.md#updating-from-the-workbook).
 
 Slack sends requests either to Socket Mode or to the URL, never both. To develop locally again, paste `infra/slack-manifest.json` back and run `npm run slack:pilot`.
 

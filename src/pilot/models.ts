@@ -10,6 +10,8 @@ export const datedRequestSchema = requestSchema.extend({ startDate: dateSchema, 
 export const assignmentSchema = z.object({
   id: z.string().min(1), accountId: z.string().min(1), startDate: dateSchema, endDate: dateSchema,
   hoursPerWeek: z.number().finite().positive(), status: z.enum(['active', 'cancelled']),
+  // 'workbook' assignments mirror checked grid boxes and are replaced by re-imports; approvals carry no source and are kept.
+  source: z.literal('workbook').optional(),
 }).strict().refine(a => a.startDate <= a.endDate, 'Invalid assignment date range');
 // Snapshot totals are intentionally absent: the schedule is the only commitment source.
 const { committedHours: _committed, currentAccountIds: _accounts, ...profileShape } = researcherSchema.shape;
