@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import type { ScoringConfig } from '../recommendations/models.js';
-import { awayConflicts, recommendForPeriod } from '../pilot/capacity.js';
-import { dateSchema, datedResearcherSchema, type DatedResearcher, type DatedRun } from '../pilot/models.js';
-import { inSlots } from '../pilot/units.js';
+import { awayConflicts, recommendForPeriod } from '../resourcing/capacity.js';
+import { dateSchema, datedResearcherSchema, type DatedResearcher, type DatedRun } from '../resourcing/models.js';
+import { inSlots } from '../resourcing/units.js';
 import { clean, slug, type GridMember, type ParsedWorkbook, type RosterMember } from './parse.js';
 import { accountIndustries, type Profile, type Profiles } from './profiles.js';
 

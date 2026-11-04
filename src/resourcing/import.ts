@@ -13,7 +13,7 @@ export interface ImportDraft {
 }
 export interface CurrentState {
   researchers: Row<DatedResearcher>[]; accounts: Row<Account>[]; report?: Row<ImportReport>;
-  /** Assignments a manager cancelled or moved in the pilot; a re-import never overrides those decisions. */
+  /** Assignments a manager cancelled or moved in Slack; a re-import never overrides those decisions. */
   changedAssignmentIds: Set<string>;
 }
 
@@ -25,8 +25,8 @@ const comparable = ({ experienceYears: _years, assignments: _assignments, ...res
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
- * Merge an uploaded workbook into live pilot state. Workbook-derived assignments follow the grid; approvals and manager changes
- * made in the pilot are kept. Assignments are never removed or reordered (positions address them), so a box unchecked in the
+ * Merge an uploaded workbook into live staffing state. Workbook-derived assignments follow the grid; approvals and manager changes
+ * made in Slack are kept. Assignments are never removed or reordered (positions address them), so a box unchecked in the
  * workbook cancels its assignment. Researchers missing from the upload become inactive with their assignments intact.
  */
 export function planImport(draft: ImportDraft, current: CurrentState) {
@@ -49,7 +49,7 @@ export function planImport(draft: ImportDraft, current: CurrentState) {
       if (!fromWorkbook(old, a)) return;
       const next = wanted.get(a.id);
       if (current.changedAssignmentIds.has(a.id)) {
-        if (next && a.status === 'cancelled') lines.push(`${old.name}: ${account(a.accountId)} is checked in the workbook but was cancelled in the pilot; keeping the cancellation`);
+        if (next && a.status === 'cancelled') lines.push(`${old.name}: ${account(a.accountId)} is checked in the workbook but was cancelled in Slack; keeping the cancellation`);
         return;
       }
       if (next && !same({ ...a, source: 'workbook' }, next)) {
@@ -64,7 +64,7 @@ export function planImport(draft: ImportDraft, current: CurrentState) {
       if (assignments.some(e => e.id === a.id)) continue;
       // An approval already copied into Excel is the same assignment: count it once.
       if (assignments.some(e => !fromWorkbook(old, e) && e.status === 'active' && e.accountId === a.accountId && overlaps(e, a))) {
-        lines.push(`${old.name}: ${account(a.accountId)} is already approved in the pilot; counted once`); continue;
+        lines.push(`${old.name}: ${account(a.accountId)} is already approved in Slack; counted once`); continue;
       }
       assignments.push(a); lines.push(`${old.name}: added to ${account(a.accountId)}`);
     }
@@ -93,7 +93,7 @@ export function planImport(draft: ImportDraft, current: CurrentState) {
   const changes = lines.length;
   lines.sort((a, b) => a.localeCompare(b));
   if (!changes) lines.push('No researcher, assignment, or account changes.');
-  lines.push(`Import issues after this update: ${draft.report.excluded.length} excluded, ${draft.report.warnings.length} warning(s). Review them with /resource-pilot issues.`);
+  lines.push(`Import issues after this update: ${draft.report.excluded.length} excluded, ${draft.report.warnings.length} warning(s). Review them with /resourcing issues.`);
   puts.push({ key: 'IMPORT', version: (current.report?.version ?? 0) + 1, data: draft.report }); checks.push({ key: 'IMPORT', version: current.report?.version ?? null });
   // The preview fingerprint: apply goes ahead only if it would make exactly the changes the manager reviewed.
   const hash = createHash('sha256').update(lines.join('\n')).digest('hex').slice(0, 16);

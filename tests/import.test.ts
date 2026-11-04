@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
-import type { DatedResearcher, ImportReport, SeedInfo } from '../src/pilot/models.js';
-import { PILOT_CHANGE, PILOT_CONFIRM, PILOT_IMPORT, PILOT_IMPORT_APPLY, PILOT_REQUEST, PILOT_SELECT } from '../src/slack/pilot.js';
+import type { DatedResearcher, ImportReport, SeedInfo } from '../src/resourcing/models.js';
+import { RESOURCING_CHANGE, RESOURCING_CONFIRM, RESOURCING_IMPORT, RESOURCING_IMPORT_APPLY, RESOURCING_REQUEST, RESOURCING_SELECT } from '../src/slack/resourcing.js';
 import { profilesFromWorkbook, profilesSchema, profileSheets } from '../src/workbook/profiles.js';
 import { sampleProfiles, sampleWorkbook } from '../src/workbook/sample.js';
 import { workbookFromUploads, workbookUpload } from '../src/workbook/upload.js';
-import { harness, option, settings, values, who, workbookConfig } from './pilot-harness.js';
+import { harness, option, settings, values, who, workbookConfig } from './harness.js';
 
 type Harness = Awaited<ReturnType<typeof harness>>;
 const profiles = profilesSchema.parse(sampleProfiles());
@@ -68,22 +68,22 @@ test('a preview lists every change and saves nothing; applying follows the workb
 
 test('approvals survive re-imports, are counted once when copied into Excel, and manager cancellations win', async () => {
   const h = await real();
-  await h.command(''); await h.submit(PILOT_REQUEST, h.views.at(-1), values);
-  await h.submit(PILOT_SELECT, h.views.at(-1), { decision: { value: { selected_option: { value: 'approve' } } }, candidates: { value: { selected_options: [{ value: 'ivy-iota' }] } } });
-  await h.submit(PILOT_CONFIRM, h.views.at(-1), {});
+  await h.command(''); await h.submit(RESOURCING_REQUEST, h.views.at(-1), values);
+  await h.submit(RESOURCING_SELECT, h.views.at(-1), { decision: { value: { selected_option: { value: 'approve' } } }, candidates: { value: { selected_options: [{ value: 'ivy-iota' }] } } });
+  await h.submit(RESOURCING_CONFIRM, h.views.at(-1), {});
   const book = updatedWorkbook(); book.getWorksheet('Resourcing Grid')!.getCell('E16').value = true; // Ivy's row after Lu's insert and Bo's removal
-  // Cancel Cy's workbook assignment in the pilot, though the workbook still checks it.
+  // Cancel Cy's workbook assignment in Slack, though the workbook still checks it.
   await h.command('assignments');
   const cy = h.views.at(-1).blocks.find((b: any) => b.block_id === 'assignment').element.options.find((o: any) => o.value.startsWith('cy-gamma'));
   assert.equal(cy, undefined); // Cy is excluded (no hire term) and never seeded; use Ed instead.
   const ed = h.views.at(-1).blocks.find((b: any) => b.block_id === 'assignment').element.options.find((o: any) => o.value.startsWith('ed-epsilon'));
-  await h.submit(PILOT_CHANGE, h.views.at(-1), { assignment: { value: option(ed.value) }, change: { value: option('cancel') } });
+  await h.submit(RESOURCING_CHANGE, h.views.at(-1), { assignment: { value: option(ed.value) }, change: { value: option('cancel') } });
   const shown = await preview(h, book);
-  assert.ok(shown.lines.includes('Ivy Iota: Fictional Screening Co is already approved in the pilot; counted once'));
-  assert.ok(shown.lines.includes('Ed Epsilon: Northwind Bakery is checked in the workbook but was cancelled in the pilot; keeping the cancellation'));
+  assert.ok(shown.lines.includes('Ivy Iota: Fictional Screening Co is already approved in Slack; counted once'));
+  assert.ok(shown.lines.includes('Ed Epsilon: Northwind Bakery is checked in the workbook but was cancelled in Slack; keeping the cancellation'));
   assert.equal((await h.service.applyImport(who, shown.draftId, shown.hash)).applied, true);
   const ivy = await researcher(h, 'ivy-iota');
-  assert.deepEqual(ivy.assignments.map(a => [a.accountId, a.status, a.source ?? 'pilot']), [['fictional-screening-co', 'active', 'pilot'], ['contoso-health', 'active', 'workbook']]);
+  assert.deepEqual(ivy.assignments.map(a => [a.accountId, a.status, a.source ?? 'slack']), [['fictional-screening-co', 'active', 'slack'], ['contoso-health', 'active', 'workbook']]);
   assert.equal((await researcher(h, 'ed-epsilon')).assignments[0]!.status, 'cancelled');
 });
 
@@ -96,10 +96,10 @@ test('a change after the preview returns an updated preview instead of applying'
   assert.equal((await researcher(h, 'bo-beta')).active, true);
 });
 
-test('fictional namespaces refuse uploads; an empty one is initialized only by a pilot manager', async () => {
+test('fictional namespaces refuse uploads; an empty one is initialized only by a bootstrap manager', async () => {
   await assert.rejects(preview(await harness()), /fictional sample data/);
   const h = await harness({}, undefined, { empty: true });
-  await assert.rejects(h.service.previewImport({ ...who, userId: 'U0OTHER1' }, {} as never), /Only configured pilot managers/);
+  await assert.rejects(h.service.previewImport({ ...who, userId: 'U0OTHER1' }, {} as never), /Only configured managers/);
   const shown = await preview(h);
   assert.equal(shown.initial, true);
   assert.match(shown.lines[0]!, /^Initialize this empty namespace from research\.xlsx: 8 researchers, 5 accounts\.$/);
@@ -109,29 +109,29 @@ test('fictional namespaces refuse uploads; an empty one is initialized only by a
   await assert.rejects(h.service.applyImport({ ...who, userId: 'U06QLUN31L0' }, shown.draftId, shown.hash), /another manager/);
 });
 
-test('Slack: /resource-pilot import uploads, previews, applies, and announces', async () => {
+test('Slack: /resourcing import uploads, previews, applies, and announces', async () => {
   const files = new Map([['https://files.slack.com/files-pri/T-F1/research.xlsx', await buffer(updatedWorkbook())],
     ['https://files.slack.com/files-pri/T-F2/profiles.xlsx', await buffer(profileSheets(new ExcelJS.Workbook(), profiles))]]);
   const h = await harness({ notify: ['U0OPS1'], fictional: false, workbook: { read: workbookUpload(settings), maxAccounts: 3, config: workbookConfig }, download: async url => files.get(url)! }, undefined, { fictional: false });
   await h.command('import');
   const form = h.views.at(-1);
   assert.equal(form.blocks.find((b: any) => b.block_id === 'files').element.type, 'file_input');
-  await h.submit(PILOT_IMPORT, form, { files: { value: { type: 'file_input', files: [] } } });
+  await h.submit(RESOURCING_IMPORT, form, { files: { value: { type: 'file_input', files: [] } } });
   assert.equal(h.views.at(-1), form); // rejected inline: no loading view, no job
   const upload = (name: string, n: number) => ({ id: `F${n}`, name, size: 1000, url_private_download: `https://files.slack.com/files-pri/T-F${n}/${name}` });
-  await h.submit(PILOT_IMPORT, form, { files: { value: { type: 'file_input', files: [upload('research.xlsx', 1), upload('profiles.xlsx', 2)] } } });
+  await h.submit(RESOURCING_IMPORT, form, { files: { value: { type: 'file_input', files: [upload('research.xlsx', 1), upload('profiles.xlsx', 2)] } } });
   const review = h.views.at(-1), body = JSON.stringify(review.blocks);
-  assert.equal(review.callback_id, PILOT_IMPORT_APPLY);
+  assert.equal(review.callback_id, RESOURCING_IMPORT_APPLY);
   assert.match(body, /Lu Nu: new strategist on Internal Comms/); assert.match(body, /Ed Epsilon: skills, interests, industry experience, 1:1 profile updated/);
-  await h.submit(PILOT_IMPORT_APPLY, review, {});
+  await h.submit(RESOURCING_IMPORT_APPLY, review, {});
   assert.equal(h.views.at(-1).title.text, 'Workbook update applied');
-  assert.match(h.posts.at(-1).text, /^STAFFING PILOT: workbook update applied by <@U0AS0D7GQMB> \(\d+ changes\)\.$/);
+  assert.match(h.posts.at(-1).text, /^RESEARCH RESOURCING: workbook update applied by <@U0AS0D7GQMB> \(\d+ changes\)\.$/);
   assert.deepEqual((await h.store.get<ImportReport>('IMPORT'))!.data.tools, ['excel', 'quid', 'semrush']);
 });
 
 test('Slack downloads only from Slack file storage', async () => {
   const h = await harness({ workbook: { read: workbookUpload(settings), maxAccounts: 3, config: workbookConfig } }, undefined, { fictional: false });
   await h.command('import');
-  await h.submit(PILOT_IMPORT, h.views.at(-1), { files: { value: { type: 'file_input', files: [{ id: 'F1', name: 'r.xlsx', size: 10, url_private_download: 'https://evil.example/r.xlsx' }] } } });
+  await h.submit(RESOURCING_IMPORT, h.views.at(-1), { files: { value: { type: 'file_input', files: [{ id: 'F1', name: 'r.xlsx', size: 10, url_private_download: 'https://evil.example/r.xlsx' }] } } });
   assert.match(JSON.stringify(h.views.at(-1).blocks), /did not come from Slack file storage/);
 });
