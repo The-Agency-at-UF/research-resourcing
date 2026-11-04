@@ -21,7 +21,7 @@ export function text(value: ExcelJS.CellValue): string {
 }
 // Excel cell checkboxes are booleans; exported or hand-typed sheets may use glyphs or an x.
 const checked = (value: ExcelJS.CellValue) => value === true || /^(true|x|yes|✓|✔|☑|☒)$/i.test(clean(text(value)));
-const cells = (row: ExcelJS.Row) => Array.from({ length: row.cellCount }, (_, i) => clean(text(row.getCell(i + 1).value)));
+export const cells = (row: ExcelJS.Row) => Array.from({ length: row.cellCount }, (_, i) => clean(text(row.getCell(i + 1).value)));
 const sections = [['analysts', /^analysts\b/i], ['strategists', /^strategists\b/i], ['new-hires', /^new hires\b/i], ['exceptions', /^exceptions\b/i]] as const;
 
 /** Read the Research Resourcing workbook by layout, not sheet names: a member roster and a person × account checkbox grid. */

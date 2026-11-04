@@ -20,9 +20,9 @@ export const plain = (value: string) => ({ type: 'plain_text_input', value });
 export const option = (value: string) => ({ type: 'static_select', selected_option: { text: { type: 'plain_text', text: value }, value } });
 export const values = { accountId: { value: option('fictional-screening-co') }, role: { value: option('strategist') }, openings: { value: plain('2') },
   startDate: { value: { type: 'datepicker', selected_date: '2026-11-16' } }, endDate: { value: { type: 'datepicker', selected_date: '2026-12-11' } }, minimumExperienceYears: { value: plain('') } };
-export async function harness(options: PilotOptions = {}, clock = () => new Date('2026-11-02T15:00:00Z'), profiles?: Profiles) {
+export async function harness(options: PilotOptions = {}, clock = () => new Date('2026-11-02T15:00:00Z'), { profiles, fictional = true, empty = false }: { profiles?: Profiles; fictional?: boolean; empty?: boolean } = {}) {
   const store = new MemoryPilotStore();
-  await seedRows(store, workbookSeed(parseWorkbook(sampleWorkbook()), settings, workbookConfig, { source: 'fictional sample workbook', fictional: true, asOf: '2026-11-02', profiles }));
+  if (!empty) await seedRows(store, workbookSeed(parseWorkbook(sampleWorkbook()), settings, workbookConfig, { source: 'fictional sample workbook', fictional, asOf: '2026-11-02', ...(profiles && { profiles }) }));
   const service = new PilotService(store, who.teamId, clock, slots), handlers = new Map<string, (input: any) => Promise<void>>();
   const app = { command: (id: string, fn: (input: any) => Promise<void>) => handlers.set(id, fn), view: (id: string, fn: (input: any) => Promise<void>) => handlers.set(id, fn) } as unknown as Pick<App, 'command' | 'view'>;
   const logs: string[] = [];

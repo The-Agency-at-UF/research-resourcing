@@ -93,7 +93,7 @@ export function workbookResearchers(parsed: ParsedWorkbook, settings: WorkbookSe
       interests: profile?.interests ?? [], industryExperienceIds: profile?.industryExperience ?? [], availableFrom: hire, availableUntil: until,
       ...(profile ? { profile: { ...(profile.hoursPerWeek !== undefined && { hoursPerWeek: profile.hoursPerWeek }), ...(asked !== undefined && { accountCap: Math.min(asked, settings.maxAccounts) }) } } : {}),
       assignments: accountIds.map(accountId => ({ id: `${slug(name)}_${accountId}`, accountId, startDate: settings.assignmentStart,
-        endDate: settings.assignmentEnd, hoursPerWeek: 1, status: 'active' })),
+        endDate: settings.assignmentEnd, hoursPerWeek: 1, status: 'active', source: 'workbook' })),
     });
     if (parsedResearcher.success) researchers.push(parsedResearcher.data);
     else exclude(name, ...parsedResearcher.error.issues.map(i => i.message));

@@ -21,7 +21,7 @@
         "command": "/resource-pilot",
         "description": "Dated staffing requests, approvals, and assignment changes",
         "should_escape": false,
-        "usage_hint": "[list | assignments | hq | issues | metrics | help]",
+        "usage_hint": "[list | assignments | hq | issues | metrics | import | help]",
         "url": "https://n2a5agvdeg35cldwmv6eo72o3u0zmavm.lambda-url.us-east-2.on.aws/"
       }
     ],
@@ -35,7 +35,8 @@
     "scopes": {
       "bot": [
         "commands",
-        "chat:write"
+        "chat:write",
+        "files:read"
       ]
     }
   },
