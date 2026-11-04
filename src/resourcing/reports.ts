@@ -9,7 +9,7 @@ const median = (values: number[]) => {
 };
 const percent = (part: number, whole: number) => whole ? ` (${Math.round(100 * part / whole)}%)` : '';
 
-/** The brief's pilot measures: request-to-approval time, recommendation acceptance, and capacity adherence. */
+/** The brief's success measures: request-to-approval time, recommendation acceptance, and capacity adherence. */
 export function computeMetrics(rows: Row[]) {
   const by = <T>(prefix: string) => rows.filter(r => r.key.startsWith(prefix)).map(r => ({ id: r.key.slice(prefix.length), data: r.data as T }));
   const requests = by<RequestState>('REQUEST#'), approvals = by<Approval>('APPROVAL#').map(a => a.data);
@@ -41,12 +41,12 @@ export function computeMetrics(rows: Row[]) {
     changes: { cancelled: changes.filter(c => c.action === 'cancel').length, rescheduled: changes.filter(c => c.action === 'reschedule').length },
   };
 }
-export type PilotMetrics = ReturnType<typeof computeMetrics>;
+export type ResourcingMetrics = ReturnType<typeof computeMetrics>;
 
-export function metricsText(m: PilotMetrics, asOf: string) {
+export function metricsText(m: ResourcingMetrics, asOf: string) {
   const hours = (h: number | undefined) => h === undefined ? 'n/a' : `${h.toFixed(1)} h`;
   return [
-    `Pilot metrics as of ${asOf}`,
+    `Metrics as of ${asOf}`,
     `Requests: ${m.requests.total} total, ${m.requests.open} open, ${m.requests.filled} filled, ${m.requests.declined} declined. Approvals: ${m.approvals}.`,
     m.decisionHours.count ? `Request to first approval: median ${hours(m.decisionHours.median)}, slowest ${hours(m.decisionHours.max)} (${m.decisionHours.count} requests).` : 'Request to first approval: no approved requests with a recorded start time yet.',
     m.acceptance.selections ? `Recommendation acceptance: ${m.acceptance.shown} of ${m.acceptance.selections} approved researchers were among those shown${percent(m.acceptance.shown, m.acceptance.selections)}; the top-ranked candidate was chosen in ${m.acceptance.topPicks} of ${m.acceptance.approvalsMeasured} approvals${percent(m.acceptance.topPicks, m.acceptance.approvalsMeasured)}.` : 'Recommendation acceptance: no approvals yet.',
@@ -57,7 +57,7 @@ export function metricsText(m: PilotMetrics, asOf: string) {
   ].join('\n');
 }
 
-/** Who is on what from today onward, plus current load; posted as the Resourcing HQ message and shown by /resource-pilot hq. */
+/** Who is on what from today onward, plus current load; posted as the Resourcing HQ message and shown by /resourcing hq. */
 export function resourcingText(snapshot: { researchers: DatedResearcher[]; accounts: Account[] }, today: string, units: CapacityUnits, label: string) {
   const names = new Map(snapshot.accounts.map(a => [a.id, a.name]));
   const byAccount = new Map<string, string[]>();

@@ -1,13 +1,13 @@
 export interface Row<T = unknown> { key: string; version: number; data: T }
 export interface Check { key: string; version: number | null }
-export interface PilotStore {
+export interface ResourcingStore {
   get<T>(key: string): Promise<Row<T> | undefined>;
   getMany(keys: string[]): Promise<(Row | undefined)[]>;
   list<T>(prefix: string): Promise<Row<T>[]>;
   commit(puts: Row[], checks: Check[]): Promise<void>;
 }
 export class ConflictError extends Error { constructor() { super('Records changed; refresh and review again.'); } }
-export class MemoryPilotStore implements PilotStore {
+export class MemoryStore implements ResourcingStore {
   private rows = new Map<string, Row>();
   async get<T>(key: string) { return structuredClone(this.rows.get(key)) as Row<T> | undefined; }
   async getMany(keys: string[]) { return keys.map(key => structuredClone(this.rows.get(key))); }
@@ -25,6 +25,6 @@ export function validateTransaction(puts: Row[], checks: Check[]) {
   for (const row of puts) {
     const check = checks.find(c => c.key === row.key);
     if (!check || row.version !== (check.version ?? 0) + 1) throw new Error('Every write must increment a checked version');
-    if (Buffer.byteLength(JSON.stringify(row)) > 350_000) throw new Error('Pilot record is too large; archive through a versioned migration before continuing');
+    if (Buffer.byteLength(JSON.stringify(row)) > 350_000) throw new Error('Record is too large; archive through a versioned migration before continuing');
   }
 }

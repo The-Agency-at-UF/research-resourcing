@@ -1,14 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import type { Account, DatedResearcher, ImportReport, RequestState } from '../src/pilot/models.js';
-import { workbookSeed } from '../src/pilot/seed.js';
-import { PILOT_REQUEST } from '../src/slack/pilot.js';
+import type { Account, DatedResearcher, ImportReport, RequestState } from '../src/resourcing/models.js';
+import { workbookSeed } from '../src/resourcing/seed.js';
+import { RESOURCING_REQUEST } from '../src/slack/resourcing.js';
 import { parseWorkbook } from '../src/workbook/parse.js';
 import { profilesSchema } from '../src/workbook/profiles.js';
 import { recommendFromWorkbook, workbookResearchers } from '../src/workbook/researchers.js';
 import { sampleProfiles, sampleWorkbook } from '../src/workbook/sample.js';
-import { harness, settings, workbookConfig, values } from './pilot-harness.js';
+import { harness, settings, workbookConfig, values } from './harness.js';
 
 const profiles = profilesSchema.parse(sampleProfiles());
 const request = JSON.parse(readFileSync(new URL('../fixtures/workbook-request.json', import.meta.url), 'utf8'));
@@ -69,7 +69,7 @@ test('the seed stores account industries and tools; the Slack form offers tools 
   const form = h.views.at(-1);
   const toolBlock = form.blocks.find((b: any) => b.block_id === 'tools');
   assert.deepEqual(toolBlock.element.options.map((o: any) => o.value), ['excel', 'quid', 'semrush']);
-  await h.submit(PILOT_REQUEST, form, { ...values, tools: { value: { type: 'multi_static_select', selected_options: [{ value: 'quid' }] } } });
+  await h.submit(RESOURCING_REQUEST, form, { ...values, tools: { value: { type: 'multi_static_select', selected_options: [{ value: 'quid' }] } } });
   const saved = (await h.store.list<RequestState>('REQUEST#'))[0]!.data.request;
   assert.deepEqual([saved.preferredSkills, saved.careerInterests, saved.industryId], [['quid'], ['entertainment', 'media'], 'entertainment']);
   const shortlist = JSON.stringify(h.views.at(-1).blocks);

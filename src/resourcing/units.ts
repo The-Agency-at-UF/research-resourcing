@@ -1,6 +1,6 @@
 import type { DatedRun } from './models.js';
 
-/** Hours for the original fictional pilot; account slots for workbook data, where each account uses one slot. */
+/** Hours for the original fictional hours data; account slots for workbook data, where each account uses one slot. */
 export type CapacityUnits = { kind: 'hours' } | { kind: 'account-slots'; maxAccounts: number };
 export const HOURS: CapacityUnits = { kind: 'hours' };
 export const amount = (units: CapacityUnits, n: number) => units.kind === 'hours' ? `${n} hours/week` : `${n} account slot${n === 1 ? '' : 's'}`;

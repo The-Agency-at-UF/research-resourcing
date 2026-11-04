@@ -1,6 +1,6 @@
 # Recommendation scoring
 
-This pilot policy is derived from the Resourcing Agent Brief. Default weights and normalization choices are development proposals for manager review. Fit scores are relative scores, not probabilities.
+This policy is derived from the Resourcing Agent Brief. Default weights and normalization choices are development proposals for manager review. Fit scores are relative scores, not probabilities.
 
 ## Eligibility before ranking
 

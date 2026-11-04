@@ -1,27 +1,20 @@
 {
   "display_information": {
-    "name": "Staffing Recommendation Beta",
-    "description": "Staffing Recommendation Beta",
+    "name": "Research Resourcing",
+    "description": "Research staffing requests, recommendations, and approvals",
     "background_color": "#173b4b"
   },
   "features": {
     "bot_user": {
-      "display_name": "Staffing Recommendation Beta",
+      "display_name": "Research Resourcing",
       "always_online": false
     },
     "slash_commands": [
       {
-        "command": "/resource-demo",
-        "description": "Try fictional staffing recommendations",
-        "usage_hint": "[form]",
+        "command": "/resourcing",
+        "description": "Staffing requests, approvals, and assignment changes",
         "should_escape": false,
-        "url": "https://n2a5agvdeg35cldwmv6eo72o3u0zmavm.lambda-url.us-east-2.on.aws/"
-      },
-      {
-        "command": "/resource-pilot",
-        "description": "Dated staffing requests, approvals, and assignment changes",
-        "should_escape": false,
-        "usage_hint": "[list | assignments | hq | issues | metrics | import | help]",
+        "usage_hint": "[list | assignments | hq | issues | metrics | import | managers | help]",
         "url": "https://n2a5agvdeg35cldwmv6eo72o3u0zmavm.lambda-url.us-east-2.on.aws/"
       }
     ],
