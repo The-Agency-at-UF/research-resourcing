@@ -46,13 +46,15 @@ Register `/resource-pilot` from `infra/slack-manifest.json` in the existing app.
 | `/resource-pilot hq` | Who is on which account from today, current load, and members with no accounts |
 | `/resource-pilot issues` | Workbook import problems: excluded members and warnings |
 | `/resource-pilot metrics` | Request-to-approval time, acceptance of shown candidates, capacity adherence, and changes |
+| `/resource-pilot import` | Upload the workbook (and optional profile sheets), review every change, then apply |
+| `/resource-pilot managers` | Operations leads add or remove pilot managers |
 | `/resource-pilot help` | This list |
 
 Every command checks the workspace and an enabled manager record first; non-managers see no staffing details.
 
 ## Manager flow
 
-The pilot seed enables Patricia, Camila, and Roger using their exact Agency Slack IDs. These pilot permissions must never be treated as a production allowlist. Each service operation checks the workspace and an enabled manager record. The final transaction also checks the manager version so a revoked permission cannot race an approval.
+A new namespace starts with Patricia, Camila, and Roger, by their exact Agency Slack IDs. After that, the manager records in the namespace are the only list. Operations leads named in `PILOT_ADMINS` (the `PilotAdmins` stack parameter: Shea `U080ZEXR998`, Charles `U061XS6438R`, and Mark Rottensteiner `UCE5K9KBJ`) change the list with `/resource-pilot managers`. They do not need to be staffing managers themselves. Removing a manager disables the record rather than deleting it, so history stays attributable. Each change writes an immutable `MANAGERCHANGE#<id>` record and is announced to `PILOT_NOTIFY`. Every enabled manager record is checked in the same transaction, so concurrent removals can never leave the pilot with no manager. These pilot permissions must never be treated as a production allowlist. Each service operation checks the workspace and an enabled manager record. The final transaction also checks the manager version so a revoked permission cannot race an approval.
 
 1. Run `/resource-pilot` and choose an account, the role needed, the number of openings, and inclusive dates. Each opening uses one account slot.
 2. Review two or three recommendations. Select one to five candidates from the retained shortlist, bounded by the remaining openings, or choose to decline remaining openings.
@@ -67,6 +69,24 @@ After an approval commits, the bot sends one notice per approval to each `PILOT_
 ## Changing assignments
 
 `/resource-pilot assignments` lists active and upcoming assignments. Managers can cancel one or move its dates. Moving rechecks availability, same-account overlap, account slots, and the researcher's availability window, treating the moved assignment as removed. Cancelling an assignment that came from an approval removes that researcher from the request's filled list and reopens a filled request as partial; a declined request stays closed. Each change is an immutable `CHANGE#<id>` record committed in the same transaction as the schedule, with the manager and researcher versions checked. Assignments are addressed by position, which is stable because assignments are only appended, never removed or reordered.
+
+## Updating from the workbook
+
+`/resource-pilot import` opens a private upload form. A manager attaches the Research Resourcing workbook (`.xlsx`), plus an optional second file with Profiles and Account Industries sheets (see [1:1 profiles](workbook.md#11-profiles)). The worker downloads the files from Slack, parses them with the same importer as seeding, and shows a preview. Nothing is written except the parsed draft, an `IMPORTDRAFT#<id>` record that holds derived staffing facts, never the file.
+
+The preview lists each change: researchers added, marked inactive, or with updated details; accounts added to or removed from someone; new account industry tags; and the resulting import issue counts. **Apply** recomputes the plan against current pilot state and commits it in one conditional transaction, only if it would make exactly the changes shown. Otherwise it shows the updated preview. Afterwards the bot posts one notice and refreshes the HQ message.
+
+Merge rules:
+
+- Assignments read from the grid are tagged `source: "workbook"` and follow the latest upload. An unchecked box cancels the assignment rather than deleting it, so assignment positions stay stable.
+- Approvals made in Slack are never touched. If the workbook also checks the same person on the same account during an approval, it is counted once.
+- A workbook assignment a manager cancelled or moved in Slack keeps that decision, and the preview says the workbook disagrees.
+- Researchers missing from the upload become inactive, and their assignments stay for history and metrics.
+- Account rows are added or retagged, never deleted. Managers and the scoring policy are unchanged.
+
+Uploads are refused in fictional namespaces so the labels never mislead. To start real data, point the app at an empty namespace (hosted: the `PilotNamespace` parameter). A pilot manager's first upload then initializes it: seed, scoring policy, accounts, managers, and researchers, labelled as real data. Locally, restart `npm run slack:pilot` after initializing. Grid-name aliases are a local-only file, so near-miss names appear as import warnings. Fix the spelling in the workbook, or seed with the CLI and `data/private/workbook-aliases.json`. One upload can change at most about 95 records atomically; larger changes should be seeded into a new namespace.
+
+The app needs the `files:read` scope for uploads (both manifests include it). Reinstall after updating the manifest.
 
 ## Metrics
 
@@ -89,7 +109,7 @@ Ranking uses minimum free weekly hours and maximum simultaneous account count ac
 
 ## Persistence and transaction invariants
 
-The workflow table has `pk=PILOT#<namespace>` and typed `sk` prefixes: `RESEARCHER#`, `ACCOUNT#`, `MANAGER#`, `REQUEST#`, `RUN#`, `REVIEW#`, `APPROVAL#`, `DECLINE#`, `CONFIG`, and `SEED`. Each item has a positive version and typed application data. Researcher items contain their complete profile and schedule; historical growth is bounded by a conservative 350 KB application guard before DynamoDB's item limit. Archival requires a separate versioned migration.
+The workflow table has `pk=PILOT#<namespace>` and typed `sk` prefixes: `RESEARCHER#`, `ACCOUNT#`, `MANAGER#`, `REQUEST#`, `RUN#`, `REVIEW#`, `APPROVAL#`, `DECLINE#`, `CHANGE#`, `MANAGERCHANGE#`, `NOTICE#`, `IMPORTDRAFT#`, `IMPORT`, `HQ`, `CONFIG`, and `SEED`. Each item has a positive version and typed application data. Researcher items contain their complete profile and schedule; historical growth is bounded by a conservative 350 KB application guard before DynamoDB's item limit. Archival requires a separate versioned migration.
 
 Recommendations and reviews are persisted before their modal appears. Review IDs are server-generated approval IDs, tied to the approving actor and immutable selected candidates. The approval path rereads manager, request, configuration, prior approval, and selected researcher rows using a transactional read. It reruns eligibility and requires the versions seen during review to match.
 

@@ -1,4 +1,4 @@
-import { overloads } from './capacity.js';
+import { awayConflicts, overloads } from './capacity.js';
 import type { Account, Approval, Change, DatedResearcher, RequestState, Review, RunState } from './models.js';
 import type { Row } from './store.js';
 import type { CapacityUnits } from './units.js';
@@ -69,12 +69,16 @@ export function resourcingText(snapshot: { researchers: DatedResearcher[]; accou
   const load = (r: DatedResearcher) => r.assignments.filter(a => a.status === 'active' && a.startDate <= today && a.endDate >= today).reduce((sum, a) => sum + a.hoursPerWeek, 0);
   const unit = units.kind === 'hours' ? ' h/week' : ' accounts';
   const people = [...snapshot.researchers].sort((a, b) => a.name.localeCompare(b.name));
-  const free = people.filter(r => load(r) === 0 && r.availableUntil >= today);
+  const awayNow = (r: DatedResearcher) => (r.away ?? []).some(w => w.from <= today && w.until >= today);
+  const free = people.filter(r => load(r) === 0 && r.availableUntil >= today && !awayNow(r));
+  const conflicts = people.flatMap(r => awayConflicts(r).filter(c => c.assignmentEnd >= today && c.until >= today)
+    .map(c => `${r.name} on ${names.get(c.accountId) ?? c.accountId} (away ${c.from} to ${c.until})`));
   return [
     `${label} — Resourcing HQ as of ${today}`,
     ...[...byAccount].sort(([a], [b]) => a.localeCompare(b)).map(([account, members]) => `${account}: ${members.join(', ')}`),
     byAccount.size ? '' : 'No active assignments.',
     `Current load: ${people.filter(r => load(r) > 0).map(r => `${r.name} ${load(r)}/${r.weeklyCapacityHours}${unit}`).join(', ') || 'none'}`,
     `No current accounts: ${free.map(r => r.name).join(', ') || 'none'}`,
+    ...(conflicts.length ? [`Assigned while away: ${conflicts.join('; ')}`] : []),
   ].filter((line, i, all) => line !== '' || i < all.length - 1).join('\n');
 }

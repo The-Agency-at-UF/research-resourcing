@@ -6,7 +6,7 @@ import { datedResearcherSchema, type Account, type DatedResearcher, type ImportR
 import type { PilotStore, Row } from './store.js';
 
 // Pilot permissions only; never a production allowlist.
-const PILOT_MANAGERS = [{ id: 'U06QLUN31L0', name: 'Patricia' }, { id: 'U09SWCWCDL3', name: 'Camila' }, { id: 'U0AS0D7GQMB', name: 'Roger' }];
+export const PILOT_MANAGERS = [{ id: 'U06QLUN31L0', name: 'Patricia' }, { id: 'U09SWCWCDL3', name: 'Camila' }, { id: 'U0AS0D7GQMB', name: 'Roger' }];
 const managerRows = (): Row[] => PILOT_MANAGERS.map(m => ({ key: `MANAGER#${m.id}`, version: 1, data: { name: m.name, enabled: true } }));
 
 export function pilotSeed(config: ScoringConfig): Row[] {
@@ -31,26 +31,36 @@ export function pilotSeed(config: ScoringConfig): Row[] {
   ];
 }
 
-/** Seed from the Research workbook: researchers in account slots, grid accounts, and the import report shown to managers in Slack. */
-export function workbookSeed(parsed: ParsedWorkbook, settings: WorkbookSettings, config: ScoringConfig,
-  options: { source: string; fictional: boolean; asOf: string; aliases?: Record<string, string>; profiles?: Profiles }): Row[] {
+export interface WorkbookOptions { source: string; asOf: string; aliases?: Record<string, string>; profiles?: Profiles }
+/** Researchers, grid accounts, and the import report derived from one workbook; shared by seeding and Slack re-imports. */
+export function workbookData(parsed: ParsedWorkbook, settings: WorkbookSettings, options: WorkbookOptions) {
   const { researchers, excluded, warnings, tools } = workbookResearchers(parsed, settings, options.asOf, options.aliases, options.profiles);
+  const report: ImportReport = { source: options.profiles ? `${options.source} + ${options.profiles.source}` : options.source, importedAt: options.asOf, warnings,
+    excluded: excluded.map(({ researcherId, reasons }) => ({ researcherId, reasons })), tools };
+  const accounts = [...parsed.accounts].map(([id, name]): Account => {
+    const { careerInterests: industries } = requestIndustries(id, options.profiles);
+    return { id, name, ...(industries.length && { industries }) };
+  });
+  return { researchers, accounts, report };
+}
+
+/** Seed from the Research workbook: researchers in account slots, grid accounts, and the import report shown to managers in Slack. */
+export function workbookSeed(parsed: ParsedWorkbook, settings: WorkbookSettings, config: ScoringConfig, options: WorkbookOptions & { fictional: boolean }): Row[] {
+  return seedFrom(workbookData(parsed, settings, options), settings.maxAccounts, config, options.fictional, options.source);
+}
+export function seedFrom(data: ReturnType<typeof workbookData>, maxAccounts: number, config: ScoringConfig, fictional: boolean, source: string): Row[] {
   return [
-    { key: 'SEED', version: 1, data: { fictional: options.fictional, schemaVersion: 2, source: options.source, capacity: 'account-slots', maxAccounts: settings.maxAccounts } satisfies SeedInfo },
+    { key: 'SEED', version: 1, data: { fictional, schemaVersion: 2, source, capacity: 'account-slots', maxAccounts } satisfies SeedInfo },
     { key: 'CONFIG', version: 1, data: config },
-    { key: 'IMPORT', version: 1, data: { source: options.profiles ? `${options.source} + ${options.profiles.source}` : options.source, importedAt: options.asOf, warnings,
-      excluded: excluded.map(({ researcherId, reasons }) => ({ researcherId, reasons })), tools } satisfies ImportReport },
-    ...[...parsed.accounts].map(([id, name]) => {
-      const { careerInterests: industries } = requestIndustries(id, options.profiles);
-      return { key: `ACCOUNT#${id}`, version: 1, data: { id, name, ...(industries.length && { industries }) } satisfies Account };
-    }),
-    ...managerRows(), ...researchers.map(r => ({ key: `RESEARCHER#${r.id}`, version: 1, data: r })),
+    { key: 'IMPORT', version: 1, data: data.report },
+    ...data.accounts.map(a => ({ key: `ACCOUNT#${a.id}`, version: 1, data: a })),
+    ...managerRows(), ...data.researchers.map(r => ({ key: `RESEARCHER#${r.id}`, version: 1, data: r })),
   ];
 }
 
 /** Refuse initialized namespaces. Large seeds commit in 100-item transactions with SEED last, so a partial seed is never marked complete. */
-export async function seedRows(store: PilotStore, rows: Row[]) {
-  if ((await store.list('')).length) throw new Error('Refusing to overwrite existing pilot state. Use a new isolated namespace for tests.');
+export async function seedRows(store: PilotStore, rows: Row[], ignore = (_key: string) => false) {
+  if ((await store.list('')).some(r => !ignore(r.key))) throw new Error('Refusing to overwrite existing pilot state. Use a new isolated namespace for tests.');
   const ordered = [...rows.filter(r => r.key !== 'SEED'), ...rows.filter(r => r.key === 'SEED')];
   for (let i = 0; i < ordered.length; i += 100) {
     const chunk = ordered.slice(i, i + 100);

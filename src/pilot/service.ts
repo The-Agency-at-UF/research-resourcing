@@ -2,8 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { configSchema, type ScoringConfig } from '../recommendations/models.js';
 import { capacityForPeriod, recommendForPeriod } from './capacity.js';
 import { dateSchema, datedRequestSchema, datedResearcherSchema, PilotError, type Account, type Actor, type Approval, type Assignment, type Change,
-  type DatedResearcher, type HqLocation, type ImportReport, type Manager, type RequestState, type Review, type RunState } from './models.js';
+  type DatedResearcher, type HqLocation, type ImportReport, type Manager, type RequestState, type Review, type RunState, type SeedInfo, type ManagerChange } from './models.js';
+import { planImport, type CurrentState, type ImportDraft } from './import.js';
 import { computeMetrics } from './reports.js';
+import { PILOT_MANAGERS, seedFrom, seedRows } from './seed.js';
 import { ConflictError, type Check, type PilotStore, type Row } from './store.js';
 import { HOURS, inSlots, type CapacityUnits } from './units.js';
 
@@ -18,7 +20,9 @@ const id = (value: string) => {
   return value;
 };
 export class PilotService {
-  constructor(public store: PilotStore, public teamId: string, private clock: () => Date = () => new Date(), public units: CapacityUnits = HOURS) {}
+  /** `admins` may change the manager list (operations leads); they need not be staffing managers themselves. */
+  constructor(public store: PilotStore, public teamId: string, private clock: () => Date = () => new Date(), public units: CapacityUnits = HOURS,
+    private admins: string[] = []) {}
   today() { return this.clock().toISOString().slice(0, 10); }
   private managerKey(actor: Actor) {
     if (actor.teamId !== this.teamId || !/^U[A-Z0-9]+$/.test(actor.userId)) throw new PilotError('unauthorized', 'Only configured pilot managers may use this workflow.');
@@ -198,6 +202,92 @@ export class PilotService {
     catch (error) { if (error instanceof ConflictError) return false; throw error; }
   }
   async metrics(actor: Actor) { await this.authorize(actor); return computeMetrics(await this.store.list('')); }
+  /**
+   * Who may import, and whether the upload initializes an empty namespace. An empty namespace has no manager rows yet, so the
+   * bundled pilot managers may initialize it. Fictional namespaces refuse real uploads so their labels never mislead.
+   */
+  private async importAccess(actor: Actor) {
+    const [seedRow, managerRow] = await this.store.getMany(['SEED', this.managerKey(actor)]);
+    if (!seedRow) {
+      if (!PILOT_MANAGERS.some(m => m.id === actor.userId)) throw new PilotError('unauthorized', 'Only configured pilot managers may use this workflow.');
+      return { initial: true as const };
+    }
+    const manager = this.validateManager(managerRow), seed = seedRow.data as SeedInfo;
+    if (seed.fictional !== false) throw new PilotError('invalid', 'This pilot namespace holds fictional sample data, so a real workbook cannot be imported into it. Point the app at an empty namespace and import there.');
+    if (seed.capacity !== 'account-slots') throw new PilotError('invalid', 'This namespace was not seeded from the Research workbook.');
+    return { initial: false as const, manager };
+  }
+  async importAllowed(actor: Actor) { return (await this.importAccess(actor)).initial; }
+  private async currentState(): Promise<CurrentState> {
+    const [researchers, accounts, report, changes] = await Promise.all([this.store.list<DatedResearcher>('RESEARCHER#'), this.store.list<Account>('ACCOUNT#'),
+      this.store.get<ImportReport>('IMPORT'), this.store.list<Change>('CHANGE#')]);
+    return { researchers, accounts, ...(report && { report }), changedAssignmentIds: new Set(changes.map(c => c.data.assignmentId)) };
+  }
+  private initialPlan(draft: ImportDraft) {
+    const lines = [`Initialize this empty namespace from ${draft.fileNames.join(' and ')}: ${draft.researchers.length} researchers, ${draft.accounts.length} accounts.`,
+      `Import issues: ${draft.report.excluded.length} excluded, ${draft.report.warnings.length} warning(s). Review them with /resource-pilot issues.`,
+      `Pilot managers: ${PILOT_MANAGERS.map(m => m.name).join(', ')}.`];
+    return { lines, hash: lines.join('\n') };
+  }
+  /** Store the parsed upload and describe what applying it would change. Nothing else is written. */
+  async previewImport(actor: Actor, input: Omit<ImportDraft, 'uploadedBy' | 'createdAt' | 'appliedAt'>) {
+    const access = await this.importAccess(actor), draftId = randomUUID();
+    const draft: ImportDraft = { ...input, uploadedBy: actor.userId, createdAt: this.clock().toISOString() };
+    const plan = access.initial ? this.initialPlan(draft) : planImport(draft, await this.currentState());
+    await this.write([{ key: `IMPORTDRAFT#${draftId}`, version: 1, data: draft }], [{ key: `IMPORTDRAFT#${draftId}`, version: null }]);
+    return { draftId, initial: access.initial, lines: plan.lines, hash: plan.hash };
+  }
+  /**
+   * Apply a previewed upload in one conditional transaction, only if it would still make exactly the reviewed changes; otherwise
+   * return the new preview. Approvals or changes made since the preview conflict on their researcher versions.
+   */
+  async applyImport(actor: Actor, draftId: string, hash: string): Promise<{ applied: true; lines: string[]; initial: boolean } | { applied: false; lines: string[]; hash: string }> {
+    const access = await this.importAccess(actor);
+    const row = required<ImportDraft>(await this.store.get(`IMPORTDRAFT#${id(draftId)}`)), draft = row.data;
+    if (draft.uploadedBy !== actor.userId) throw new PilotError('unauthorized', 'This import belongs to another manager.');
+    if (draft.appliedAt) throw new PilotError('closed', `This upload was already applied at ${draft.appliedAt}.`);
+    const done = next(row, { ...draft, appliedAt: this.clock().toISOString() });
+    if (access.initial) {
+      const plan = this.initialPlan(draft);
+      if (plan.hash !== hash) return { applied: false, ...plan };
+      await seedRows(this.store, seedFrom(draft, draft.maxAccounts, draft.config, false, draft.report.source), key => key.startsWith('IMPORTDRAFT#'));
+      await this.write([done], [check(row)]);
+      return { applied: true, lines: plan.lines, initial: true };
+    }
+    const plan = planImport(draft, await this.currentState());
+    if (plan.hash !== hash) return { applied: false, lines: plan.lines, hash: plan.hash };
+    const checks = [...plan.checks, check(row), check(access.manager)];
+    if (plan.puts.length + 1 + 1 > 100) throw new PilotError('invalid', `This upload changes ${plan.puts.length} records, more than one atomic update allows. Seed a new namespace from it with npm run pilot:seed instead.`);
+    await this.write([...plan.puts, done], checks);
+    return { applied: true, lines: plan.lines, initial: false };
+  }
+  private requireAdmin(actor: Actor) {
+    this.managerKey(actor);
+    if (!this.admins.includes(actor.userId)) throw new PilotError('unauthorized', 'Only the configured operations leads may change pilot managers.');
+  }
+  async managers(actor: Actor) {
+    this.requireAdmin(actor);
+    return (await this.store.list<Manager>('MANAGER#')).map(r => ({ userId: r.key.slice(8), ...r.data })).sort((a, b) => a.name.localeCompare(b.name));
+  }
+  /**
+   * Add, re-enable, or remove (disable) a manager, with an immutable record. Rows are kept so history stays attributable. Every
+   * enabled manager row is checked, so two concurrent removals can never leave the pilot without a manager.
+   */
+  async setManager(actor: Actor, userId: string, action: 'add' | 'remove', name?: string) {
+    this.requireAdmin(actor);
+    const key = this.managerKey({ teamId: actor.teamId, userId });
+    const rows = await this.store.list<Manager>('MANAGER#'), row = rows.find(r => r.key === key);
+    const enabled = rows.filter(r => r.data.enabled === true);
+    if (action === 'add' && row?.data.enabled) throw new PilotError('invalid', `${row.data.name} is already a pilot manager.`);
+    if (action === 'remove' && !row?.data.enabled) throw new PilotError('invalid', 'That person is not a pilot manager.');
+    if (action === 'remove' && enabled.length <= 1) throw new PilotError('invalid', 'Keep at least one pilot manager. Add another manager before removing this one.');
+    const label = (name ?? '').trim().slice(0, 80) || row?.data.name || userId;
+    const record: ManagerChange = { id: randomUUID(), actor, userId, action, name: label, changedAt: this.clock().toISOString() };
+    const data: Manager = { name: label, enabled: action === 'add' };
+    await this.write([row ? next(row, data) : { key, version: 1, data }, { key: `MANAGERCHANGE#${record.id}`, version: 1, data: record }],
+      [...enabled.filter(r => r.key !== key).map(check), row ? check(row) : { key, version: null }, { key: `MANAGERCHANGE#${record.id}`, version: null }]);
+    return record;
+  }
   hqLocation() { return this.store.get<HqLocation>('HQ'); }
   async saveHqLocation(location: HqLocation, previous?: Row<HqLocation>) {
     await this.write([previous ? next(previous, location) : { key: 'HQ', version: 1, data: location }], [previous ? check(previous) : { key: 'HQ', version: null }]);

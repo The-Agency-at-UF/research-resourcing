@@ -27,6 +27,10 @@ Parameters:
     Type: String
     Default: ''
     Description: Comma-separated Slack user or channel IDs notified after approvals and changes
+  PilotAdmins:
+    Type: String
+    Default: ''
+    Description: Comma-separated Slack user IDs of operations leads who may add or remove pilot managers
   PilotHqChannel:
     Type: String
     Default: ''
@@ -173,6 +177,7 @@ Resources:
           SLACK_TEAM_ID: !Ref SlackTeamId
           PILOT_NOTIFY: !Ref PilotNotify
           PILOT_HQ_CHANNEL: !Ref PilotHqChannel
+          PILOT_ADMINS: !Ref PilotAdmins
           PARAMETER_PREFIX: !Ref SlackParameterPrefix
       Policies:
         - Statement:

@@ -20,7 +20,7 @@
         "command": "/resource-pilot",
         "description": "Dated staffing requests, approvals, and assignment changes",
         "should_escape": false,
-        "usage_hint": "[list | assignments | hq | issues | metrics | help]"
+        "usage_hint": "[list | assignments | hq | issues | metrics | import | help]"
       }
     ],
     "app_home": {
@@ -33,7 +33,8 @@
     "scopes": {
       "bot": [
         "commands",
-        "chat:write"
+        "chat:write",
+        "files:read"
       ]
     }
   },
