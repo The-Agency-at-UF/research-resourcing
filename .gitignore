@@ -1,11 +1,14 @@
 node_modules/
 dist/
 .env
+.env.resourcing
 .env.*
 !.env.example
+!.env.resourcing.example
 artifacts/
 data/private/
 *.xlsx
 *.xls
 .DS_Store
 coverage/
+brag-output*/

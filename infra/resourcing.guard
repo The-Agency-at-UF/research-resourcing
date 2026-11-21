@@ -1,0 +1,29 @@
+let tables = Resources.*[ Type == 'AWS::DynamoDB::Table' ]
+rule retain_all_staffing_tables {
+  %tables {
+    DeletionPolicy == 'Retain'
+    UpdateReplacePolicy == 'Retain'
+    Properties.BillingMode == 'PAY_PER_REQUEST'
+  }
+}
+rule local_client_has_no_public_ingress {
+  Resources.ScoringFunction.Properties.Events !exists
+}
+rule encrypted_workflow {
+  Resources.WorkflowState.Properties.SSESpecification.SSEEnabled == true
+}
+rule scoped_runtime_policy {
+  Resources.ClientRole.Properties.Policies[*].PolicyDocument.Statement[*].Resource.'Fn::GetAtt' == 'WorkflowState.Arn'
+  Resources.ClientRole.Properties.AssumeRolePolicyDocument.Statement[*].Principal.AWS.Ref == 'OperatorArn'
+}
+rule slack_ingress_is_receiver_only {
+  Resources.SlackWorkerFunction.Properties.FunctionUrlConfig !exists
+  Resources.SlackWorkerFunction.Properties.Events !exists
+  Resources.SlackWorkerFunction.Properties.EventInvokeConfig.MaximumRetryAttempts == 0
+  Resources.SlackReceiverFunction.Properties.Environment.Variables.WORKFLOW_TABLE !exists
+}
+rule slack_secrets_stay_out_of_environment {
+  Resources.SlackReceiverFunction.Properties.Environment.Variables.SLACK_BOT_TOKEN !exists
+  Resources.SlackReceiverFunction.Properties.Environment.Variables.SLACK_SIGNING_SECRET !exists
+  Resources.SlackWorkerFunction.Properties.Environment.Variables.SLACK_BOT_TOKEN !exists
+}
