@@ -50,6 +50,6 @@ export interface Change {
 }
 export interface HqLocation { channel: string; ts: string }
 export interface ManagerChange { id: string; actor: Actor; userId: string; action: 'add' | 'remove'; name: string; changedAt: string }
-export class PilotError extends Error {
+export class ResourcingError extends Error {
   constructor(public code: 'unauthorized' | 'invalid' | 'stale' | 'closed' | 'not_found', message: string) { super(message); }
 }

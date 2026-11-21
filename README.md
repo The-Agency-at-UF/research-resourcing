@@ -1,81 +1,59 @@
 # Research Resourcing
 
-The dated DynamoDB pilot is documented in [pilot setup and approval rules](docs/pilot.md) and runs on demand in Lambda ([hosting](docs/hosting.md)). `/resource-pilot` supports date-aware capacity, manager-only selection, and atomic batch approval with fresh availability checks. It uses fictional AWS data; the undated demo below remains available.
+Staffing recommendations and approvals for The Agency at UF's Research department, based on the Resourcing Agent Brief. Managers use `/resourcing` in Slack. The command filters eligible researchers and ranks them with configurable criteria. It shows two or three recommendations from a retained five, and saves manager-approved assignments with date-aware capacity and atomic checks.
 
-Research's real staffing workbook (member roster plus account grid) can be ranked locally with `npm run workbook -- <downloaded.xlsx>`; capacity is measured in account slots because the workbook has no hours. See [workbook import](docs/workbook.md).
-
-A research staffing prototype based on the Resourcing Agent Brief: filter eligibility, rank researchers with configurable criteria, retain up to five candidates, and display two or three recommendations to managers.
+- [Staffing workflow and approval rules](docs/resourcing.md): commands, the manager flow, assignment changes, workbook updates, metrics, and data model.
+- [Workbook import](docs/workbook.md): reading the Research Resourcing workbook and the optional 1:1 profiles. Capacity is measured in account slots because the workbook has no hours.
+- [Hosting](docs/hosting.md): the Slack app runs on demand in Lambda. [Local Slack setup](docs/slack-setup.md) covers development over Socket Mode.
 
 ## Run locally
 
-Requires Node.js 24 and npm. All fixtures are fictional. No service credentials are needed for scoring.
+Requires Node.js 24 and npm. Fixtures are fictional. No service credentials are needed for scoring.
 
 ```bash
 npm ci
-npm run demo
-```
-
-The CLI displays three recommendations and retains the top five with scores, explanations, configuration, exclusions, and warnings in ignored `artifacts/recommendation-run.json`. Manager text is saved to `artifacts/manager-view.txt`.
-
-```bash
-npm run demo -- fixtures/request-no-match.json
+npm run demo                                   # CLI ranking on fictional fixtures
+npm run workbook -- --sample --sample-profiles # ranking from the fictional workbook layout
 npm run typecheck
 npm test
 npm run build
-npm run build:lambda
+npm run build:hosted
 ```
 
-Run `npm run demo` again after the no-match example to restore the standard output. These local artifacts are not a durable production audit database.
+The CLI demo displays three recommendations and keeps the top five, with scores, explanations, configuration, exclusions, and warnings, in ignored `artifacts/`. These local artifacts are not a durable audit record.
 
 ## Configure ranking
 
-Edit `config/scoring.json`: bandwidth 50%, skills 20%, experience 10%, interests 8%, account load 7%, industry 5%. Weights must sum to 1 and bandwidth must be the largest individual weight. Display count may be 2 or 3; retention is 5.
-
-These are proposed pilot defaults. Review [scoring assumptions](docs/scoring.md) with research managers before using live data. Multiple identical openings share one shortlist; no researcher is automatically assigned.
+`config/scoring-workbook.json` holds the ranking weights for workbook data, and `config/scoring.json` holds them for the hours-based fixtures. Weights must sum to 1, and bandwidth must be the largest individual weight. Display count may be 2 or 3; retention is 5. Review [scoring assumptions](docs/scoring.md) with Research managers. Identical openings share one shortlist, and nobody is assigned without a manager's approval.
 
 ## Connect services
 
-[Access setup](docs/access-setup.md) covers Microsoft app registration, AWS SSO, and future model access. Draft admin requests are included and have not been sent.
+[Access setup](docs/access-setup.md) covers Microsoft app registration, AWS SSO, and model access. Draft admin requests are included and have not been sent.
 
 ```bash
 cp .env.example .env
 npm run access:check
-```
-
-The checker reports configuration presence only. Once the relevant permissions and credentials are configured:
-
-```bash
 npm run microsoft:check
 ```
-
-The Microsoft helper verifies delegated sign-in and a OneDrive read. See the Slack development demo and optional Gemini explanations below.
 
 ## Structure
 
 ```text
-config/scoring.json          Pilot scoring policy
-fixtures/                    Fictional input data
+config/                      Scoring policies, workbook settings and UF term dates
 src/recommendations/         Validation, eligibility, ranking, explanations
-src/demo.ts                  Local demo and retained audit output
-src/lambda.ts                Direct-invoke scoring handler
-src/integrations/dynamodb.ts Optional audit persistence
-src/scripts/                 Access and sign-in helpers
+src/resourcing/              Dated capacity, workflow service, DynamoDB store, imports, reports
+src/workbook/                Workbook, 1:1 profile, and upload parsing
+src/slack/                   /resourcing handlers and modals
+src/hosted/                  Lambda receiver and worker
+src/scripts/                 Seeding, metrics, access and sign-in helpers
 tests/                       Business rules and integration checks
-infra/                       Undeployed AWS SAM template
+infra/                       AWS SAM template, guard rules, Slack manifests
 ```
-
-## Slack development demo
-
-After configuring the ignored `.env`, run `npm run slack:demo`. `/resource-demo` returns the fictional sample privately; `/resource-demo form` opens a validated request form and private results modal. The top five are retained in ignored `artifacts/slack-runs/`; two or three appear to the requester. No assignments are made. See [Slack setup and limitations](docs/slack-demo.md).
-
-Try 40 hours/week for a no-match result or 10 openings for a shortage. Fixtures and policy load at startup; restart after edits.
 
 ## Scope
 
-The undated demo implements scoring and optional explanations. The separate fictional DynamoDB pilot adds date-aware capacity, manager authorization, selection, and atomic approvals with fresh checks. Live Excel parsing/sync, verified updates to both Excel datasets, operations notifications, and Slack Canvas updates remain future work. A DynamoDB test approval does not confirm an Excel update or a real assignment.
-
-See [technology notes](docs/tech-stack.md) for working features versus prepared integration pieces. Gemini is optional for explanations and never determines scores. Fine-tuning is not required.
+Assignments are saved in DynamoDB. They are not yet written back to the Excel workbook. Writing back, and reading the workbook automatically instead of uploading it, both need Microsoft Graph access from UF IT. See [technology notes](docs/tech-stack.md).
 
 ## Optional Gemini explanations
 
-Set `GEMINI_API_KEY` in the ignored `.env` (default model: `gemini-flash-latest`), then run `npm run demo:gemini` or start `npm run slack:demo` and use `/resource-demo ai`. Google's alias tracks the latest Flash release automatically. `GEMINI_MODEL` can override the shared default with a pinned ID for manual rollback; restart the local process after changing it. Transient provider errors receive up to ten retries after the initial request, always using the same configured ID. Gemini selects which verified facts to emphasize; code validates and renders those facts. Scores, ordering, warnings, and manager approval remain under application control. Invalid output or exhausted provider failures use the full factual-template fallback, labeled explicitly in Slack; there is no automatic alternate-model fallback. Served model versions are recorded when Google returns them. See [system instructions and guardrails](docs/gemini-guardrails.md). Only the Slack command sends a private response; neither mode updates Excel.
+Set `GEMINI_API_KEY` in the ignored `.env` (default model: `gemini-flash-latest`), then run `npm run demo:gemini`. `GEMINI_MODEL` can override the default with a pinned ID. Gemini selects which verified facts to emphasize; code validates and renders them. Scores, ordering, warnings, and approval stay under application control. Invalid output or provider failures fall back to the full factual template. See [system instructions and guardrails](docs/gemini-guardrails.md). `/resourcing` does not call Gemini.

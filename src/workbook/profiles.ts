@@ -1,13 +1,13 @@
 import type ExcelJS from 'exceljs';
 import { z } from 'zod';
-import { dateSchema } from '../pilot/models.js';
+import { dateSchema } from '../resourcing/models.js';
 import { cells, slug } from './parse.js';
 
 const tags = z.array(z.string().trim().min(1)).default([]).transform(values => [...new Set(values.map(slug).filter(Boolean))]);
 
 /**
  * Staffing facts taken from researcher 1:1s, kept in ignored data/private because the source notes are personal.
- * Only these fields reach the pilot; the notes themselves are never imported.
+ * Only these fields are imported; the notes themselves are never imported.
  */
 export const profilesSchema = z.object({
   source: z.string().trim().min(1),

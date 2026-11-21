@@ -1,37 +1,37 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Research staffing pilot with versioned atomic approvals; Slack ingress through a signed Lambda Function URL
+Description: Research Resourcing staffing with versioned atomic approvals; Slack ingress through a signed Lambda Function URL
 Metadata:
   AWSToolsMetrics:
     AWSAgentToolkit: aws-cloudformation@3
   com.aws.cloudformation.Context:
     ref:
-      - at: docs/pilot.md
-        has: pilot deployment, transaction invariants, and runtime permissions
+      - at: docs/resourcing.md
+        has: deployment, transaction invariants, and runtime permissions
 Parameters:
-  PilotOperatorArn:
+  OperatorArn:
     Type: String
     AllowedPattern: '^arn:aws:iam::[0-9]{12}:role/.+$'
-    Description: Existing project SSO role allowed to assume the restricted local pilot role
-  PilotNamespace:
+    Description: Existing project SSO role allowed to assume the restricted local client role
+  Namespace:
     Type: String
-    Default: workbook-sample-v1
+    Default: sample
     AllowedPattern: '^[a-zA-Z0-9_-]{1,80}$'
     Description: Workflow namespace the hosted Slack app reads and writes
-  PilotFictional:
+  Fictional:
     Type: String
     Default: 'true'
     AllowedValues: ['true', 'false']
     Description: Label for loading screens; the worker reads the namespace's own label for results
-  PilotNotify:
+  NotifyTargets:
     Type: String
     Default: ''
     Description: Comma-separated Slack user or channel IDs notified after approvals and changes
-  PilotAdmins:
+  Admins:
     Type: String
-    Default: ''
-    Description: Comma-separated Slack user IDs of operations leads who may add or remove pilot managers
-  PilotHqChannel:
+    Default: 'U080ZEXR998,U061XS6438R,UCE5K9KBJ'
+    Description: Comma-separated Slack user IDs of operations leads who may add or remove managers
+  HqChannel:
     Type: String
     Default: ''
     Description: Slack channel ID for the Resourcing HQ message
@@ -41,7 +41,7 @@ Parameters:
     AllowedPattern: '^T[A-Z0-9]+$'
   SlackParameterPrefix:
     Type: String
-    Default: /research-resourcing/pilot
+    Default: /research-resourcing
     AllowedPattern: '^/[a-zA-Z0-9/_-]+$'
     Description: SSM path holding SecureString SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET, created by an operator
 Resources:
@@ -105,7 +105,7 @@ Resources:
           KeyType: HASH
         - AttributeName: sk
           KeyType: RANGE
-  PilotClientRole:
+  ClientRole:
     Type: AWS::IAM::Role
     # Local Socket Mode uses temporary assumed-role credentials; no public ingress or stored AWS keys.
     Properties:
@@ -114,10 +114,10 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              AWS: !Ref PilotOperatorArn
+              AWS: !Ref OperatorArn
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: WorkflowPilotAccess
+        - PolicyName: WorkflowAccess
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -144,8 +144,7 @@ Resources:
         AuthType: NONE
       Environment:
         Variables:
-          SLACK_TEAM_ID: !Ref SlackTeamId
-          PILOT_FICTIONAL: !Ref PilotFictional
+          RESOURCING_FICTIONAL: !Ref Fictional
           WORKER_FUNCTION: !Ref SlackWorkerFunction
           PARAMETER_PREFIX: !Ref SlackParameterPrefix
       Policies:
@@ -172,12 +171,12 @@ Resources:
       Environment:
         Variables:
           WORKFLOW_TABLE: !Ref WorkflowState
-          PILOT_NAMESPACE: !Ref PilotNamespace
-          PILOT_AWS_ACCOUNT_ID: '726964604716'
+          RESOURCING_NAMESPACE: !Ref Namespace
+          RESOURCING_AWS_ACCOUNT_ID: '726964604716'
           SLACK_TEAM_ID: !Ref SlackTeamId
-          PILOT_NOTIFY: !Ref PilotNotify
-          PILOT_HQ_CHANNEL: !Ref PilotHqChannel
-          PILOT_ADMINS: !Ref PilotAdmins
+          RESOURCING_NOTIFY: !Ref NotifyTargets
+          RESOURCING_HQ_CHANNEL: !Ref HqChannel
+          RESOURCING_ADMINS: !Ref Admins
           PARAMETER_PREFIX: !Ref SlackParameterPrefix
       Policies:
         - Statement:
@@ -212,8 +211,8 @@ Outputs:
   RecommendationResultsTable:
     Value: !Ref RecommendationResults
   WorkflowTable:
-    Description: Fictional pilot workflow and immutable decision records
+    Description: Staffing workflow and immutable decision records
     Value: !Ref WorkflowState
-  PilotClientRoleArn:
-    Description: Restricted role for the local Slack pilot
-    Value: !GetAtt PilotClientRole.Arn
+  ClientRoleArn:
+    Description: Restricted role for local Slack and operator scripts
+    Value: !GetAtt ClientRole.Arn

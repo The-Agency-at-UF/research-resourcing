@@ -2,11 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { configSchema } from '../src/recommendations/models.js';
-import { capacityForPeriod, recommendForPeriod } from '../src/pilot/capacity.js';
-import { dateSchema, datedRequestSchema, datedResearcherSchema, PilotError, type DatedResearcher } from '../src/pilot/models.js';
-import { MemoryPilotStore } from '../src/pilot/store.js';
-import { PilotService } from '../src/pilot/service.js';
-import { seedPilot } from '../src/pilot/seed.js';
+import { capacityForPeriod, recommendForPeriod } from '../src/resourcing/capacity.js';
+import { dateSchema, datedRequestSchema, datedResearcherSchema, ResourcingError, type DatedResearcher } from '../src/resourcing/models.js';
+import { MemoryStore } from '../src/resourcing/store.js';
+import { ResourcingService } from '../src/resourcing/service.js';
+import { seedSampleHours } from '../src/resourcing/seed.js';
 
 export const config = configSchema.parse(JSON.parse(readFileSync(new URL('../config/scoring.json', import.meta.url), 'utf8')));
 export const actor = { teamId: 'TB67278DB', userId: 'U0AS0D7GQMB' };
@@ -19,10 +19,10 @@ const assignment = (startDate: string, endDate: string, hoursPerWeek = 6, accoun
   id, accountId, startDate, endDate, hoursPerWeek, status: 'active' as const,
 });
 export async function setup() {
-  const store = new MemoryPilotStore(); await seedPilot(store, config);
-  return { store, service: new PilotService(store, actor.teamId) };
+  const store = new MemoryStore(); await seedSampleHours(store, config);
+  return { store, service: new ResourcingService(store, actor.teamId) };
 }
-export async function prepare(service: PilotService, request = input, selected = ['sample-sam']) {
+export async function prepare(service: ResourcingService, request = input, selected = ['sample-sam']) {
   const requestId = await service.createRequest(actor, request), run = await service.recommendations(actor, requestId);
   return { requestId, ...(await service.prepareApproval(actor, requestId, run.runId, selected)) };
 }
@@ -79,12 +79,12 @@ test('invalid and duplicate dated records are excluded rather than inferred', ()
   const r = researcher(); const run = recommendForPeriod([r, r, { id: 'missing' }], input, config);
   assert.equal(run.eligibleCount, 0); assert.ok(run.excluded.every(e => e.dataIssue));
 });
-test('pilot seed refuses to overwrite state', async () => {
-  const { store } = await setup(); await assert.rejects(seedPilot(store, config), /Refusing/);
+test('seeding refuses to overwrite state', async () => {
+  const { store } = await setup(); await assert.rejects(seedSampleHours(store, config), /Refusing/);
 });
 test('authorization denies wrong team, unknown users and disabled managers', async () => {
   const { store, service } = await setup();
-  for (const who of [{ ...actor, teamId: 'TOTHER' }, { ...actor, userId: 'UUNKNOWN' }]) await assert.rejects(service.createRequest(who, input), (e: unknown) => e instanceof PilotError && e.code === 'unauthorized');
+  for (const who of [{ ...actor, teamId: 'TOTHER' }, { ...actor, userId: 'UUNKNOWN' }]) await assert.rejects(service.createRequest(who, input), (e: unknown) => e instanceof ResourcingError && e.code === 'unauthorized');
   const row = (await store.get(`MANAGER#${actor.userId}`))!;
   await store.commit([{ ...row, version: 2, data: { enabled: false, name: 'Roger' } }], [{ key: row.key, version: 1 }]);
   await assert.rejects(service.requests(actor), /Only configured/);
@@ -93,7 +93,7 @@ test('selection does not reserve capacity; partial batches and restart preserve 
   const { store, service } = await setup(), prepared = await prepare(service);
   assert.equal((await store.get<DatedResearcher>('RESEARCHER#sample-sam'))!.data.assignments.length, 0);
   await service.approve(actor, prepared.approvalId);
-  const restarted = new PilotService(store, actor.teamId), state = await restarted.request(actor, prepared.requestId);
+  const restarted = new ResourcingService(store, actor.teamId), state = await restarted.request(actor, prepared.requestId);
   assert.equal(state.data.status, 'partial'); assert.deepEqual(state.data.filledResearcherIds, ['sample-sam']);
   const run = await restarted.recommendations(actor, prepared.requestId);
   assert.equal(run.run.request.openings, 1); assert.ok(!run.run.retained.some(r => r.researcherId === 'sample-sam'));

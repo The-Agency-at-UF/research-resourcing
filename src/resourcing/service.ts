@@ -1,35 +1,35 @@
 import { randomUUID } from 'node:crypto';
 import { configSchema, type ScoringConfig } from '../recommendations/models.js';
 import { capacityForPeriod, recommendForPeriod } from './capacity.js';
-import { dateSchema, datedRequestSchema, datedResearcherSchema, PilotError, type Account, type Actor, type Approval, type Assignment, type Change,
+import { dateSchema, datedRequestSchema, datedResearcherSchema, ResourcingError, type Account, type Actor, type Approval, type Assignment, type Change,
   type DatedResearcher, type HqLocation, type ImportReport, type Manager, type RequestState, type Review, type RunState, type SeedInfo, type ManagerChange } from './models.js';
 import { planImport, type CurrentState, type ImportDraft } from './import.js';
 import { computeMetrics } from './reports.js';
-import { PILOT_MANAGERS, seedFrom, seedRows } from './seed.js';
-import { ConflictError, type Check, type PilotStore, type Row } from './store.js';
+import { BOOTSTRAP_MANAGERS, seedFrom, seedRows } from './seed.js';
+import { ConflictError, type Check, type ResourcingStore, type Row } from './store.js';
 import { HOURS, inSlots, type CapacityUnits } from './units.js';
 
 const required = <T>(row: Row | undefined): Row<T> => {
-  if (!row) throw new PilotError('not_found', 'The pilot record was not found.');
+  if (!row) throw new ResourcingError('not_found', 'The record was not found.');
   return row as Row<T>;
 };
 const check = (row: Row): Check => ({ key: row.key, version: row.version });
 const next = <T>(row: Row<T>, data: T): Row<T> => ({ ...row, version: row.version + 1, data });
 const id = (value: string) => {
-  if (!/^[a-zA-Z0-9_-]{1,100}$/.test(value)) throw new PilotError('invalid', 'Invalid pilot identifier.');
+  if (!/^[a-zA-Z0-9_-]{1,100}$/.test(value)) throw new ResourcingError('invalid', 'Invalid identifier.');
   return value;
 };
-export class PilotService {
+export class ResourcingService {
   /** `admins` may change the manager list (operations leads); they need not be staffing managers themselves. */
-  constructor(public store: PilotStore, public teamId: string, private clock: () => Date = () => new Date(), public units: CapacityUnits = HOURS,
+  constructor(public store: ResourcingStore, public teamId: string, private clock: () => Date = () => new Date(), public units: CapacityUnits = HOURS,
     private admins: string[] = []) {}
   today() { return this.clock().toISOString().slice(0, 10); }
   private managerKey(actor: Actor) {
-    if (actor.teamId !== this.teamId || !/^U[A-Z0-9]+$/.test(actor.userId)) throw new PilotError('unauthorized', 'Only configured pilot managers may use this workflow.');
+    if (actor.teamId !== this.teamId || !/^U[A-Z0-9]+$/.test(actor.userId)) throw new ResourcingError('unauthorized', 'Only configured managers may use /resourcing.');
     return `MANAGER#${actor.userId}`;
   }
   private validateManager(row: Row | undefined): Row<Manager> {
-    if (!row || (row.data as Manager)?.enabled !== true) throw new PilotError('unauthorized', 'Only configured pilot managers may use this workflow.');
+    if (!row || (row.data as Manager)?.enabled !== true) throw new ResourcingError('unauthorized', 'Only configured managers may use /resourcing.');
     return row as Row<Manager>;
   }
   async authorize(actor: Actor) { return this.validateManager(await this.store.get(this.managerKey(actor))); }
@@ -38,15 +38,15 @@ export class PilotService {
   async request(actor: Actor, requestId: string) { await this.authorize(actor); return required<RequestState>(await this.store.get(`REQUEST#${id(requestId)}`)); }
   private async write(puts: Row[], checks: Check[]) {
     try { await this.store.commit(puts, checks); }
-    catch (error) { if (error instanceof ConflictError) throw new PilotError('stale', error.message); throw error; }
+    catch (error) { if (error instanceof ConflictError) throw new ResourcingError('stale', error.message); throw error; }
   }
   async createRequest(actor: Actor, input: unknown, requestId: string = randomUUID()) {
     const manager = await this.authorize(actor), request = datedRequestSchema.parse(input);
     const account = required<Account>(await this.store.get(`ACCOUNT#${id(request.accountId)}`));
-    if (request.accountName !== account.data.name) throw new PilotError('invalid', 'Choose a configured fictional account.');
+    if (request.accountName !== account.data.name) throw new ResourcingError('invalid', 'Choose a configured fictional account.');
     const key = `REQUEST#${id(requestId)}`, existing = await this.store.get<RequestState>(key);
     if (existing) {
-      if (JSON.stringify(existing.data.request) !== JSON.stringify(request)) throw new PilotError('invalid', 'This request identifier is already in use.');
+      if (JSON.stringify(existing.data.request) !== JSON.stringify(request)) throw new ResourcingError('invalid', 'This request identifier is already in use.');
       return requestId;
     }
     await this.write([{ key, version: 1, data: { request, filledResearcherIds: [], status: 'awaiting_manager', createdAt: this.clock().toISOString() } satisfies RequestState }],
@@ -67,24 +67,24 @@ export class PilotService {
     return { runId, ...record };
   }
   private open(state: RequestState) {
-    if (state.status === 'filled' || state.status === 'declined') throw new PilotError('closed', `This request is ${state.status}.`);
+    if (state.status === 'filled' || state.status === 'declined') throw new ResourcingError('closed', `This request is ${state.status}.`);
   }
   async prepareApproval(actor: Actor, requestId: string, runId: string, selectedIds: string[]) {
     const managerKey = this.managerKey(actor);
-    if (!selectedIds.length || selectedIds.length > 5 || new Set(selectedIds).size !== selectedIds.length) throw new PilotError('invalid', 'Choose one to five unique candidates.');
+    if (!selectedIds.length || selectedIds.length > 5 || new Set(selectedIds).size !== selectedIds.length) throw new ResourcingError('invalid', 'Choose one to five unique candidates.');
     selectedIds.forEach(id);
     const keys = [managerKey, `REQUEST#${id(requestId)}`, `RUN#${id(runId)}`, 'CONFIG', ...selectedIds.map(s => `RESEARCHER#${s}`)];
     const rows = await this.store.getMany(keys);
     const manager = this.validateManager(rows[0]), state = required<RequestState>(rows[1]), savedRun = required<RunState>(rows[2]), policy = required<ScoringConfig>(rows[3]);
     this.open(state.data);
-    if (state.data.runId !== runId || savedRun.data.configVersion !== policy.version) throw new PilotError('stale', 'Recommendations changed. Refresh and review again.');
-    if (selectedIds.length > state.data.request.openings - state.data.filledResearcherIds.length) throw new PilotError('invalid', 'Too many selections for the remaining openings.');
-    if (selectedIds.some(s => !savedRun.data.run.retained.some(r => r.researcherId === s) || state.data.filledResearcherIds.includes(s))) throw new PilotError('invalid', 'Choose unassigned candidates from this retained shortlist.');
+    if (state.data.runId !== runId || savedRun.data.configVersion !== policy.version) throw new ResourcingError('stale', 'Recommendations changed. Refresh and review again.');
+    if (selectedIds.length > state.data.request.openings - state.data.filledResearcherIds.length) throw new ResourcingError('invalid', 'Too many selections for the remaining openings.');
+    if (selectedIds.some(s => !savedRun.data.run.retained.some(r => r.researcherId === s) || state.data.filledResearcherIds.includes(s))) throw new ResourcingError('invalid', 'Choose unassigned candidates from this retained shortlist.');
     const researchers = rows.slice(4).map(row => required<DatedResearcher>(row));
-    if (researchers.some((row, i) => row.data.id !== selectedIds[i])) throw new PilotError('invalid', 'A researcher record has a conflicting identifier.');
-    if (researchers.some(r => r.version !== savedRun.data.researcherVersions[r.data.id])) throw new PilotError('stale', 'Researcher availability changed. Refresh recommendations and review again.');
+    if (researchers.some((row, i) => row.data.id !== selectedIds[i])) throw new ResourcingError('invalid', 'A researcher record has a conflicting identifier.');
+    if (researchers.some(r => r.version !== savedRun.data.researcherVersions[r.data.id])) throw new ResourcingError('stale', 'Researcher availability changed. Refresh recommendations and review again.');
     const validated = recommendForPeriod(researchers.map(r => r.data), { ...state.data.request, openings: selectedIds.length }, configSchema.parse(policy.data));
-    if (validated.eligibleCount !== selectedIds.length) throw new PilotError('stale', 'A selected researcher is no longer eligible. Refresh recommendations.');
+    if (validated.eligibleCount !== selectedIds.length) throw new ResourcingError('stale', 'A selected researcher is no longer eligible. Refresh recommendations.');
     const approvalId = randomUUID();
     const review: Review = { requestId, runId, actor, selectedIds: [...selectedIds], requestVersion: state.version,
       managerVersion: manager.version, configVersion: policy.version,
@@ -97,19 +97,19 @@ export class PilotService {
   async approve(actor: Actor, approvalId: string): Promise<Approval> {
     const manager = await this.authorize(actor);
     const reviewRow = required<Review>(await this.store.get(`REVIEW#${id(approvalId)}`)), review = reviewRow.data;
-    if (review.actor.teamId !== actor.teamId || review.actor.userId !== actor.userId) throw new PilotError('unauthorized', 'This confirmation belongs to another manager.');
+    if (review.actor.teamId !== actor.teamId || review.actor.userId !== actor.userId) throw new ResourcingError('unauthorized', 'This confirmation belongs to another manager.');
     const keys = [manager.key, `REQUEST#${review.requestId}`, 'CONFIG', `APPROVAL#${approvalId}`, ...review.selectedIds.map(s => `RESEARCHER#${s}`)];
     const rows = await this.store.getMany(keys), currentManager = this.validateManager(rows[0]);
     if (rows[3]) return required<Approval>(rows[3]).data;
     const state = required<RequestState>(rows[1]), policy = required<ScoringConfig>(rows[2]); this.open(state.data);
     const researchers = rows.slice(4).map(r => required<DatedResearcher>(r));
-    if (researchers.some((row, i) => row.data.id !== review.selectedIds[i])) throw new PilotError('invalid', 'A researcher record has a conflicting identifier.');
+    if (researchers.some((row, i) => row.data.id !== review.selectedIds[i])) throw new ResourcingError('invalid', 'A researcher record has a conflicting identifier.');
     if (currentManager.version !== review.managerVersion || state.version !== review.requestVersion || policy.version !== review.configVersion ||
-        state.data.runId !== review.runId || researchers.some(r => r.version !== review.researcherVersions[r.data.id])) throw new PilotError('stale', 'Records changed after your review. Refresh recommendations and confirm again.');
+        state.data.runId !== review.runId || researchers.some(r => r.version !== review.researcherVersions[r.data.id])) throw new ResourcingError('stale', 'Records changed after your review. Refresh recommendations and confirm again.');
     const request = state.data.request;
-    if (review.selectedIds.length > request.openings - state.data.filledResearcherIds.length || review.selectedIds.some(s => state.data.filledResearcherIds.includes(s))) throw new PilotError('stale', 'The remaining openings changed.');
+    if (review.selectedIds.length > request.openings - state.data.filledResearcherIds.length || review.selectedIds.some(s => state.data.filledResearcherIds.includes(s))) throw new ResourcingError('stale', 'The remaining openings changed.');
     const fresh = recommendForPeriod(researchers.map(r => r.data), { ...request, openings: review.selectedIds.length }, configSchema.parse(policy.data));
-    if (fresh.eligibleCount !== review.selectedIds.length) throw new PilotError('stale', 'Availability no longer meets the request. Refresh recommendations.');
+    if (fresh.eligibleCount !== review.selectedIds.length) throw new ResourcingError('stale', 'Availability no longer meets the request. Refresh recommendations.');
     const approval: Approval = { id: approvalId, requestId: review.requestId, actor, researcherIds: [...review.selectedIds],
       assignmentIds: review.selectedIds.map(s => `${approvalId}_${s}`), approvedAt: this.clock().toISOString() };
     const filled = [...state.data.filledResearcherIds, ...review.selectedIds];
@@ -132,7 +132,7 @@ export class PilotService {
   async decline(actor: Actor, requestId: string, expectedVersion: number) {
     const rows = await this.store.getMany([this.managerKey(actor), `REQUEST#${id(requestId)}`]);
     const manager = this.validateManager(rows[0]), state = required<RequestState>(rows[1]);
-    if (state.version !== expectedVersion) throw new PilotError('stale', 'The request changed. Review its current state first.');
+    if (state.version !== expectedVersion) throw new ResourcingError('stale', 'The request changed. Review its current state first.');
     this.open(state.data);
     const auditId = randomUUID();
     await this.write([next(state, { ...state.data, status: 'declined' }), { key: `DECLINE#${auditId}`, version: 1,
@@ -161,14 +161,14 @@ export class PilotService {
   async changeAssignment(actor: Actor, researcherId: string, index: number, change: { action: 'cancel' } | { action: 'reschedule'; startDate: string; endDate: string }) {
     const [managerRow, researcherRow] = await this.store.getMany([this.managerKey(actor), `RESEARCHER#${id(researcherId)}`]);
     const manager = this.validateManager(managerRow), row = required<DatedResearcher>(researcherRow), current = row.data.assignments[index];
-    if (!Number.isInteger(index) || !current || current.status !== 'active') throw new PilotError('invalid', 'Choose an active assignment.');
+    if (!Number.isInteger(index) || !current || current.status !== 'active') throw new ResourcingError('invalid', 'Choose an active assignment.');
     let updated: Assignment = { ...current, status: 'cancelled' };
     if (change.action === 'reschedule') {
       const startDate = dateSchema.safeParse(change.startDate), endDate = dateSchema.safeParse(change.endDate);
-      if (!startDate.success || !endDate.success || startDate.data > endDate.data) throw new PilotError('invalid', 'Choose a valid new date range.');
+      if (!startDate.success || !endDate.success || startDate.data > endDate.data) throw new ResourcingError('invalid', 'Choose a valid new date range.');
       const others = { ...row.data, assignments: row.data.assignments.filter((_, i) => i !== index) };
       const fit = capacityForPeriod(others, { accountId: current.accountId, hoursPerResearcher: current.hoursPerWeek, startDate: startDate.data, endDate: endDate.data });
-      if (fit.reasons.length) throw new PilotError('invalid', `The new dates do not fit: ${fit.reasons.join('; ')}`);
+      if (fit.reasons.length) throw new ResourcingError('invalid', `The new dates do not fit: ${fit.reasons.join('; ')}`);
       updated = { ...current, startDate: startDate.data, endDate: endDate.data };
     }
     const approvalId = current.id.includes('_') ? current.id.slice(0, current.id.indexOf('_')) : '';
@@ -204,17 +204,17 @@ export class PilotService {
   async metrics(actor: Actor) { await this.authorize(actor); return computeMetrics(await this.store.list('')); }
   /**
    * Who may import, and whether the upload initializes an empty namespace. An empty namespace has no manager rows yet, so the
-   * bundled pilot managers may initialize it. Fictional namespaces refuse real uploads so their labels never mislead.
+   * bootstrap managers may initialize it. Fictional namespaces refuse real uploads so their labels never mislead.
    */
   private async importAccess(actor: Actor) {
     const [seedRow, managerRow] = await this.store.getMany(['SEED', this.managerKey(actor)]);
     if (!seedRow) {
-      if (!PILOT_MANAGERS.some(m => m.id === actor.userId)) throw new PilotError('unauthorized', 'Only configured pilot managers may use this workflow.');
+      if (!BOOTSTRAP_MANAGERS.some(m => m.id === actor.userId)) throw new ResourcingError('unauthorized', 'Only configured managers may use /resourcing.');
       return { initial: true as const };
     }
     const manager = this.validateManager(managerRow), seed = seedRow.data as SeedInfo;
-    if (seed.fictional !== false) throw new PilotError('invalid', 'This pilot namespace holds fictional sample data, so a real workbook cannot be imported into it. Point the app at an empty namespace and import there.');
-    if (seed.capacity !== 'account-slots') throw new PilotError('invalid', 'This namespace was not seeded from the Research workbook.');
+    if (seed.fictional !== false) throw new ResourcingError('invalid', 'This namespace holds fictional sample data, so a real workbook cannot be imported into it. Point the app at an empty namespace and import there.');
+    if (seed.capacity !== 'account-slots') throw new ResourcingError('invalid', 'This namespace was not seeded from the Research workbook.');
     return { initial: false as const, manager };
   }
   async importAllowed(actor: Actor) { return (await this.importAccess(actor)).initial; }
@@ -225,8 +225,8 @@ export class PilotService {
   }
   private initialPlan(draft: ImportDraft) {
     const lines = [`Initialize this empty namespace from ${draft.fileNames.join(' and ')}: ${draft.researchers.length} researchers, ${draft.accounts.length} accounts.`,
-      `Import issues: ${draft.report.excluded.length} excluded, ${draft.report.warnings.length} warning(s). Review them with /resource-pilot issues.`,
-      `Pilot managers: ${PILOT_MANAGERS.map(m => m.name).join(', ')}.`];
+      `Import issues: ${draft.report.excluded.length} excluded, ${draft.report.warnings.length} warning(s). Review them with /resourcing issues.`,
+      `Managers: ${BOOTSTRAP_MANAGERS.map(m => m.name).join(', ')}.`];
     return { lines, hash: lines.join('\n') };
   }
   /** Store the parsed upload and describe what applying it would change. Nothing else is written. */
@@ -244,8 +244,8 @@ export class PilotService {
   async applyImport(actor: Actor, draftId: string, hash: string): Promise<{ applied: true; lines: string[]; initial: boolean } | { applied: false; lines: string[]; hash: string }> {
     const access = await this.importAccess(actor);
     const row = required<ImportDraft>(await this.store.get(`IMPORTDRAFT#${id(draftId)}`)), draft = row.data;
-    if (draft.uploadedBy !== actor.userId) throw new PilotError('unauthorized', 'This import belongs to another manager.');
-    if (draft.appliedAt) throw new PilotError('closed', `This upload was already applied at ${draft.appliedAt}.`);
+    if (draft.uploadedBy !== actor.userId) throw new ResourcingError('unauthorized', 'This import belongs to another manager.');
+    if (draft.appliedAt) throw new ResourcingError('closed', `This upload was already applied at ${draft.appliedAt}.`);
     const done = next(row, { ...draft, appliedAt: this.clock().toISOString() });
     if (access.initial) {
       const plan = this.initialPlan(draft);
@@ -257,13 +257,13 @@ export class PilotService {
     const plan = planImport(draft, await this.currentState());
     if (plan.hash !== hash) return { applied: false, lines: plan.lines, hash: plan.hash };
     const checks = [...plan.checks, check(row), check(access.manager)];
-    if (plan.puts.length + 1 + 1 > 100) throw new PilotError('invalid', `This upload changes ${plan.puts.length} records, more than one atomic update allows. Seed a new namespace from it with npm run pilot:seed instead.`);
+    if (plan.puts.length + 1 + 1 > 100) throw new ResourcingError('invalid', `This upload changes ${plan.puts.length} records, more than one atomic update allows. Seed a new namespace from it with npm run seed instead.`);
     await this.write([...plan.puts, done], checks);
     return { applied: true, lines: plan.lines, initial: false };
   }
   private requireAdmin(actor: Actor) {
     this.managerKey(actor);
-    if (!this.admins.includes(actor.userId)) throw new PilotError('unauthorized', 'Only the configured operations leads may change pilot managers.');
+    if (!this.admins.includes(actor.userId)) throw new ResourcingError('unauthorized', 'Only the configured operations leads may change managers.');
   }
   async managers(actor: Actor) {
     this.requireAdmin(actor);
@@ -271,16 +271,16 @@ export class PilotService {
   }
   /**
    * Add, re-enable, or remove (disable) a manager, with an immutable record. Rows are kept so history stays attributable. Every
-   * enabled manager row is checked, so two concurrent removals can never leave the pilot without a manager.
+   * enabled manager row is checked, so two concurrent removals can never leave no manager.
    */
   async setManager(actor: Actor, userId: string, action: 'add' | 'remove', name?: string) {
     this.requireAdmin(actor);
     const key = this.managerKey({ teamId: actor.teamId, userId });
     const rows = await this.store.list<Manager>('MANAGER#'), row = rows.find(r => r.key === key);
     const enabled = rows.filter(r => r.data.enabled === true);
-    if (action === 'add' && row?.data.enabled) throw new PilotError('invalid', `${row.data.name} is already a pilot manager.`);
-    if (action === 'remove' && !row?.data.enabled) throw new PilotError('invalid', 'That person is not a pilot manager.');
-    if (action === 'remove' && enabled.length <= 1) throw new PilotError('invalid', 'Keep at least one pilot manager. Add another manager before removing this one.');
+    if (action === 'add' && row?.data.enabled) throw new ResourcingError('invalid', `${row.data.name} is already a manager.`);
+    if (action === 'remove' && !row?.data.enabled) throw new ResourcingError('invalid', 'That person is not a manager.');
+    if (action === 'remove' && enabled.length <= 1) throw new ResourcingError('invalid', 'Keep at least one manager. Add another manager before removing this one.');
     const label = (name ?? '').trim().slice(0, 80) || row?.data.name || userId;
     const record: ManagerChange = { id: randomUUID(), actor, userId, action, name: label, changedAt: this.clock().toISOString() };
     const data: Manager = { name: label, enabled: action === 'add' };

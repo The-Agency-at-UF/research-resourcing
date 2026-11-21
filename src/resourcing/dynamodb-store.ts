@@ -1,12 +1,12 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, QueryCommand, TransactGetCommand, TransactWriteCommand, type QueryCommandOutput } from '@aws-sdk/lib-dynamodb';
-import { ConflictError, validateTransaction, type Check, type PilotStore, type Row } from './store.js';
+import { ConflictError, validateTransaction, type Check, type ResourcingStore, type Row } from './store.js';
 
-export class DynamoPilotStore implements PilotStore {
+export class DynamoStore implements ResourcingStore {
   private pk: string;
   constructor(private client: DynamoDBDocumentClient, private tableName: string, namespace: string) {
-    if (!tableName || !/^[a-zA-Z0-9_-]{1,80}$/.test(namespace)) throw new Error('Configure a workflow table and valid pilot namespace');
-    this.pk = `PILOT#${namespace}`;
+    if (!tableName || !/^[a-zA-Z0-9_-]{1,80}$/.test(namespace)) throw new Error('Configure a workflow table and valid namespace');
+    this.pk = `RESOURCING#${namespace}`;
   }
   private key(key: string) { return { pk: this.pk, sk: key }; }
   async get<T>(key: string) { return (await this.getMany([key]))[0] as Row<T> | undefined; }
@@ -45,10 +45,10 @@ export class DynamoPilotStore implements PilotStore {
     }
   }
 }
-export function configuredPilotStore() {
-  const table = process.env.WORKFLOW_TABLE, namespace = process.env.PILOT_NAMESPACE ?? 'fictional-v1';
+export function configuredStore() {
+  const table = process.env.WORKFLOW_TABLE, namespace = process.env.RESOURCING_NAMESPACE ?? 'fictional-v1';
   if (!table || !process.env.AWS_REGION) throw new Error('Set WORKFLOW_TABLE and AWS_REGION');
-  return new DynamoPilotStore(DynamoDBDocumentClient.from(new DynamoDBClient({ region: process.env.AWS_REGION }), {
+  return new DynamoStore(DynamoDBDocumentClient.from(new DynamoDBClient({ region: process.env.AWS_REGION }), {
     marshallOptions: { removeUndefinedValues: true },
   }), table, namespace);
 }

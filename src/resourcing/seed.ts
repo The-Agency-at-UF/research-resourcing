@@ -3,13 +3,13 @@ import type { ParsedWorkbook } from '../workbook/parse.js';
 import type { Profiles } from '../workbook/profiles.js';
 import { requestIndustries, workbookResearchers, type WorkbookSettings } from '../workbook/researchers.js';
 import { datedResearcherSchema, type Account, type DatedResearcher, type ImportReport, type SeedInfo } from './models.js';
-import type { PilotStore, Row } from './store.js';
+import type { ResourcingStore, Row } from './store.js';
 
-// Pilot permissions only; never a production allowlist.
-export const PILOT_MANAGERS = [{ id: 'U06QLUN31L0', name: 'Patricia' }, { id: 'U09SWCWCDL3', name: 'Camila' }, { id: 'U0AS0D7GQMB', name: 'Roger' }];
-const managerRows = (): Row[] => PILOT_MANAGERS.map(m => ({ key: `MANAGER#${m.id}`, version: 1, data: { name: m.name, enabled: true } }));
+// Bootstraps a new namespace only; afterwards its manager records are the list.
+export const BOOTSTRAP_MANAGERS = [{ id: 'U06QLUN31L0', name: 'Patricia' }, { id: 'U09SWCWCDL3', name: 'Camila' }, { id: 'U0AS0D7GQMB', name: 'Roger' }];
+const managerRows = (): Row[] => BOOTSTRAP_MANAGERS.map(m => ({ key: `MANAGER#${m.id}`, version: 1, data: { name: m.name, enabled: true } }));
 
-export function pilotSeed(config: ScoringConfig): Row[] {
+export function sampleHoursSeed(config: ScoringConfig): Row[] {
   const researchers = [
     { id: 'sample-sam', name: 'Sample Sam', hours: 12, assignments: [] },
     { id: 'sample-avery', name: 'Sample Avery', hours: 10, assignments: [{ id: 'existing-avery', accountId: 'sample-retail', startDate: '2026-11-02', endDate: '2026-11-13', hoursPerWeek: 4, status: 'active' }] },
@@ -59,12 +59,12 @@ export function seedFrom(data: ReturnType<typeof workbookData>, maxAccounts: num
 }
 
 /** Refuse initialized namespaces. Large seeds commit in 100-item transactions with SEED last, so a partial seed is never marked complete. */
-export async function seedRows(store: PilotStore, rows: Row[], ignore = (_key: string) => false) {
-  if ((await store.list('')).some(r => !ignore(r.key))) throw new Error('Refusing to overwrite existing pilot state. Use a new isolated namespace for tests.');
+export async function seedRows(store: ResourcingStore, rows: Row[], ignore = (_key: string) => false) {
+  if ((await store.list('')).some(r => !ignore(r.key))) throw new Error('Refusing to overwrite existing state. Use a new isolated namespace for tests.');
   const ordered = [...rows.filter(r => r.key !== 'SEED'), ...rows.filter(r => r.key === 'SEED')];
   for (let i = 0; i < ordered.length; i += 100) {
     const chunk = ordered.slice(i, i + 100);
     await store.commit(chunk, chunk.map(r => ({ key: r.key, version: null })));
   }
 }
-export const seedPilot = (store: PilotStore, config: ScoringConfig) => seedRows(store, pilotSeed(config));
+export const seedSampleHours = (store: ResourcingStore, config: ScoringConfig) => seedRows(store, sampleHoursSeed(config));

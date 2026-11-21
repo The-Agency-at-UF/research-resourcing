@@ -2,21 +2,21 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { configuredPilotStore } from '../src/pilot/dynamodb-store.js';
-import { seedPilot } from '../src/pilot/seed.js';
-import { PilotService } from '../src/pilot/service.js';
-import { verifyPilotTarget } from '../src/pilot/runtime.js';
+import { configuredStore } from '../src/resourcing/dynamodb-store.js';
+import { seedSampleHours } from '../src/resourcing/seed.js';
+import { ResourcingService } from '../src/resourcing/service.js';
+import { verifyAwsTarget } from '../src/resourcing/runtime.js';
 import { configSchema } from '../src/recommendations/models.js';
-import type { DatedResearcher } from '../src/pilot/models.js';
+import type { DatedResearcher } from '../src/resourcing/models.js';
 
 test('real DynamoDB: atomic conflicting batches, idempotency, seed protection and restart', async () => {
-  await verifyPilotTarget();
-  const originalNamespace = process.env.PILOT_NAMESPACE;
-  process.env.PILOT_NAMESPACE = `integration-${randomUUID()}`;
+  await verifyAwsTarget();
+  const originalNamespace = process.env.RESOURCING_NAMESPACE;
+  process.env.RESOURCING_NAMESPACE = `integration-${randomUUID()}`;
   try {
-    const store = configuredPilotStore(), config = configSchema.parse(JSON.parse(readFileSync('config/scoring.json', 'utf8')));
-    await seedPilot(store, config); await assert.rejects(seedPilot(store, config), /Refusing/);
-    const actor = { teamId: 'TB67278DB', userId: 'U0AS0D7GQMB' }, service = new PilotService(store, actor.teamId);
+    const store = configuredStore(), config = configSchema.parse(JSON.parse(readFileSync('config/scoring.json', 'utf8')));
+    await seedSampleHours(store, config); await assert.rejects(seedSampleHours(store, config), /Refusing/);
+    const actor = { teamId: 'TB67278DB', userId: 'U0AS0D7GQMB' }, service = new ResourcingService(store, actor.teamId);
     const request = { accountId: 'sample-health', accountName: 'Fictional Health Account', hoursPerResearcher: 8, openings: 2,
       requiredSkills: ['survey-design'], preferredSkills: [], minimumExperienceYears: 0, careerInterests: [], startDate: '2026-11-02', endDate: '2026-11-30' };
     const prepare = async (ids: string[]) => {
@@ -27,7 +27,7 @@ test('real DynamoDB: atomic conflicting batches, idempotency, seed protection an
     const outcomes = await Promise.allSettled([service.approve(actor, a.approvalId), service.approve(actor, b.approvalId)]);
     assert.equal(outcomes.filter(r => r.status === 'fulfilled').length, 1);
     const winner = outcomes[0]!.status === 'fulfilled' ? a : b, loser = winner === a ? b : a;
-    const freshService = new PilotService(configuredPilotStore(), actor.teamId);
+    const freshService = new ResourcingService(configuredStore(), actor.teamId);
     const approved = await freshService.approve(actor, winner.approvalId);
     assert.equal(approved.assignmentIds.length, 2);
     assert.equal((await freshService.request(actor, winner.review.requestId)).data.status, 'filled');
@@ -36,27 +36,27 @@ test('real DynamoDB: atomic conflicting batches, idempotency, seed protection an
     const schedules = await store.list<DatedResearcher>('RESEARCHER#');
     assert.equal(schedules.flatMap(r => r.data.assignments).filter(a => a.id.startsWith(loser.approvalId)).length, 0);
     assert.equal(schedules.flatMap(r => r.data.assignments).filter(a => a.id.startsWith(winner.approvalId)).length, 2);
-    console.log(`Verified isolated DynamoDB namespace ${process.env.PILOT_NAMESPACE}; records retained for inspection.`);
-  } finally { if (originalNamespace === undefined) delete process.env.PILOT_NAMESPACE; else process.env.PILOT_NAMESPACE = originalNamespace; }
+    console.log(`Verified isolated DynamoDB namespace ${process.env.RESOURCING_NAMESPACE}; records retained for inspection.`);
+  } finally { if (originalNamespace === undefined) delete process.env.RESOURCING_NAMESPACE; else process.env.RESOURCING_NAMESPACE = originalNamespace; }
 });
 
 test('real DynamoDB: workbook seed, role-based approval, cancellation, notices, HQ and metrics', async () => {
-  const { workbookSeed, seedRows } = await import('../src/pilot/seed.js');
+  const { workbookSeed, seedRows } = await import('../src/resourcing/seed.js');
   const { parseWorkbook } = await import('../src/workbook/parse.js');
   const { workbookSettingsSchema } = await import('../src/workbook/researchers.js');
   const { sampleWorkbook } = await import('../src/workbook/sample.js');
-  const { seedSettings } = await import('../src/pilot/runtime.js');
-  await verifyPilotTarget();
-  const originalNamespace = process.env.PILOT_NAMESPACE;
-  process.env.PILOT_NAMESPACE = `integration-workbook-${randomUUID()}`;
+  const { seedSettings } = await import('../src/resourcing/runtime.js');
+  await verifyAwsTarget();
+  const originalNamespace = process.env.RESOURCING_NAMESPACE;
+  process.env.RESOURCING_NAMESPACE = `integration-workbook-${randomUUID()}`;
   try {
     const read = (file: string) => JSON.parse(readFileSync(file, 'utf8'));
-    const store = configuredPilotStore();
+    const store = configuredStore();
     await seedRows(store, workbookSeed(parseWorkbook(sampleWorkbook()), workbookSettingsSchema.parse(read('config/workbook.json')),
       configSchema.parse(read('config/scoring-workbook.json')), { source: 'fictional sample workbook', fictional: true, asOf: '2026-11-02' }));
     const { units, fictional } = await seedSettings(store);
     assert.deepEqual(units, { kind: 'account-slots', maxAccounts: 3 }); assert.equal(fictional, true);
-    const actor = { teamId: 'TB67278DB', userId: 'U0AS0D7GQMB' }, service = new PilotService(store, actor.teamId, undefined, units);
+    const actor = { teamId: 'TB67278DB', userId: 'U0AS0D7GQMB' }, service = new ResourcingService(store, actor.teamId, undefined, units);
     const requestId = await service.createRequest(actor, { accountId: 'fictional-screening-co', accountName: 'Fictional Screening Co', hoursPerResearcher: 1, openings: 2,
       requiredSkills: ['strategist'], preferredSkills: [], minimumExperienceYears: 0, careerInterests: [], startDate: '2026-11-16', endDate: '2026-12-11' });
     const run = await service.recommendations(actor, requestId);
@@ -74,6 +74,6 @@ test('real DynamoDB: workbook seed, role-based approval, cancellation, notices, 
     const metrics = await service.metrics(actor);
     assert.deepEqual(metrics.acceptance, { selections: 2, shown: 2, approvalsMeasured: 1, topPicks: 1 });
     assert.deepEqual(metrics.changes, { cancelled: 1, rescheduled: 0 });
-    console.log(`Verified workbook flow in DynamoDB namespace ${process.env.PILOT_NAMESPACE}; records retained for inspection.`);
-  } finally { if (originalNamespace === undefined) delete process.env.PILOT_NAMESPACE; else process.env.PILOT_NAMESPACE = originalNamespace; }
+    console.log(`Verified workbook flow in DynamoDB namespace ${process.env.RESOURCING_NAMESPACE}; records retained for inspection.`);
+  } finally { if (originalNamespace === undefined) delete process.env.RESOURCING_NAMESPACE; else process.env.RESOURCING_NAMESPACE = originalNamespace; }
 });
