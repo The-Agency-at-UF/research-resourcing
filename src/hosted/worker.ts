@@ -23,5 +23,5 @@ export async function handler(job: PilotJob, context: { invokedFunctionArn: stri
   // Read per job: a Slack upload can initialize the namespace, which changes its units and label.
   const { units, fictional } = await seedSettings(store);
   const options: PilotOptions = { notify: idList(process.env.PILOT_NOTIFY), hqChannel: idList(process.env.PILOT_HQ_CHANNEL)[0], fictional, workbook: upload };
-  await runPilotJob(job, client, new PilotService(store, process.env.SLACK_TEAM_ID ?? '', undefined, units), options);
+  await runPilotJob(job, client, new PilotService(store, process.env.SLACK_TEAM_ID ?? '', undefined, units, idList(process.env.PILOT_ADMINS)), options);
 }

@@ -42,7 +42,7 @@ const modal = (title: string, blocks: types.ModalView['blocks'], callback?: stri
   ...(callback ? { callback_id: callback, private_metadata: metadata, submit: text('Continue') } : {}),
 });
 export const PILOT_REQUEST = 'resource_pilot_request', PILOT_SELECT = 'resource_pilot_select', PILOT_CONFIRM = 'resource_pilot_confirm',
-  PILOT_RESUME = 'resource_pilot_resume', PILOT_CHANGE = 'resource_pilot_change', PILOT_IMPORT = 'resource_pilot_import', PILOT_IMPORT_APPLY = 'resource_pilot_import_apply';
+  PILOT_RESUME = 'resource_pilot_resume', PILOT_CHANGE = 'resource_pilot_change', PILOT_IMPORT = 'resource_pilot_import', PILOT_IMPORT_APPLY = 'resource_pilot_import_apply', PILOT_MANAGERS = 'resource_pilot_managers';
 const MAX_UPLOAD = 10 * 1024 * 1024;
 const metadata = (view: { private_metadata: string }): Record<string, string | number> => {
   try { const value = JSON.parse(view.private_metadata); if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(); return value; }
@@ -145,6 +145,24 @@ export function importPreviewModal(preview: { draftId: string; hash: string; lin
     section(preview.initial ? 'Initializing writes every record above. Nothing is saved until you apply.' : 'Nothing is saved until you apply. If the pilot changes first, you will see an updated preview.'),
   ], PILOT_IMPORT_APPLY, JSON.stringify({ draftId: preview.draftId, hash: preview.hash }), fictional), submit: text(preview.initial ? 'Initialize pilot' : 'Apply update') };
 }
+type ManagerRow = Awaited<ReturnType<PilotService['managers']>>[number];
+/** Operations leads add or remove staffing managers; mentions render names, so no users:read scope is needed. */
+export function managersModal(managers: ManagerRow[], fictional = true) {
+  const current = managers.filter(m => m.enabled);
+  return modal('Pilot managers', [
+    { type: 'section', text: { type: 'mrkdwn', text: `*Current managers (${current.length}):*\n${current.map(m => `• <@${m.userId}> (${m.name})`).join('\n') || 'none'}`.slice(0, 2900) } },
+    { type: 'input', block_id: 'user', label: text('Person'), element: { type: 'users_select', action_id: 'value' } },
+    select('action', 'Change', [{ text: 'Add as a manager', value: 'add' }, { text: 'Remove as a manager', value: 'remove' }]),
+    plainInput('name', 'Name shown in pilot records (when adding)', '', 80, true),
+    section('Managers can create requests, approve staffing, change assignments, and import the workbook. Every change is recorded and announced.'),
+  ], PILOT_MANAGERS, '{}', fictional);
+}
+function managerErrors(values: ViewOutput['state']['values']) {
+  const errors: Record<string, string> = {};
+  if (!/^U[A-Z0-9]+$/.test(field(values, 'user')?.selected_user ?? '')) errors.user = 'Choose a person.';
+  if (!['add', 'remove'].includes(field(values, 'action')?.selected_option?.value ?? '')) errors.action = 'Choose add or remove.';
+  return Object.keys(errors).length ? errors : undefined;
+}
 type Upload = { name: string; url_private_download?: string; size?: number; filetype?: string };
 function uploadErrors(values: ViewOutput['state']['values']) {
   const files = (field(values, 'files') as { files?: Upload[] } | undefined)?.files ?? [];
@@ -166,7 +184,8 @@ async function slackDownload(url: string, token: string | undefined): Promise<Ar
 }
 const help = ['/resource-pilot — new staffing request (role, openings, dates)', '/resource-pilot list — resume a saved request', '/resource-pilot <request-id> — open a request',
   '/resource-pilot assignments — cancel or change an assignment', '/resource-pilot hq — current resourcing view', '/resource-pilot issues — workbook import problems',
-  '/resource-pilot metrics — pilot measures', '/resource-pilot import — update from an uploaded workbook (preview first)'].join('\n');
+  '/resource-pilot metrics — pilot measures', '/resource-pilot import — update from an uploaded workbook (preview first)',
+  '/resource-pilot managers — add or remove pilot managers (operations leads only)'].join('\n');
 
 /** The slow half of a pilot interaction: runs inline under Socket Mode, or in the worker Lambda when hosted. Plain JSON. */
 export type PilotJob =
@@ -175,7 +194,8 @@ export type PilotJob =
 type SlackCalls = Pick<App['client'], 'views' | 'chat'> & { token?: string | undefined };
 const loading: Record<string, string> = { [PILOT_REQUEST]: 'Loading dated recommendations…', [PILOT_RESUME]: 'Loading saved request…',
   [PILOT_SELECT]: 'Checking current availability…', [PILOT_CONFIRM]: 'Rechecking and saving your decision…', [PILOT_CHANGE]: 'Checking and saving the change…',
-  [PILOT_IMPORT]: 'Reading the workbook and comparing it with the pilot…', [PILOT_IMPORT_APPLY]: 'Rechecking and applying the update…' };
+  [PILOT_IMPORT]: 'Reading the workbook and comparing it with the pilot…', [PILOT_IMPORT_APPLY]: 'Rechecking and applying the update…',
+  [PILOT_MANAGERS]: 'Saving the manager change…' };
 function changeErrors(values: ViewOutput['state']['values']) {
   const errors: Record<string, string> = {}, kind = field(values, 'change')?.selected_option?.value;
   if (!/^(.+)#(\d+)$/.test(field(values, 'assignment')?.selected_option?.value ?? '')) errors.assignment = 'Choose an assignment.';
@@ -202,9 +222,9 @@ export function registerPilotHandlers(app: Pick<App, 'command' | 'view'>, servic
   });
   const validators: Record<string, (values: ViewOutput['state']['values']) => Record<string, string> | undefined> = {
     [PILOT_REQUEST]: values => { const parsed = parsePilotForm(values); return parsed.ok ? undefined : parsed.errors; }, [PILOT_CHANGE]: changeErrors,
-    [PILOT_IMPORT]: uploadErrors,
+    [PILOT_IMPORT]: uploadErrors, [PILOT_MANAGERS]: managerErrors,
   };
-  for (const callback of [PILOT_REQUEST, PILOT_RESUME, PILOT_SELECT, PILOT_CONFIRM, PILOT_CHANGE, PILOT_IMPORT, PILOT_IMPORT_APPLY]) {
+  for (const callback of [PILOT_REQUEST, PILOT_RESUME, PILOT_SELECT, PILOT_CONFIRM, PILOT_CHANGE, PILOT_IMPORT, PILOT_IMPORT_APPLY, PILOT_MANAGERS]) {
     app.view(callback, async ({ body, view: submitted, ack, client }) => {
       const errors = validators[callback]?.(submitted.state.values);
       if (errors) { await ack({ response_action: 'errors', errors }); return; }
@@ -253,8 +273,10 @@ export async function runPilotJob(job: PilotJob, client: SlackCalls, service: Pi
     if (job.kind === 'command') {
       const action = job.text.trim(), keyword = action.toLowerCase();
       // Import may initialize an empty namespace, which has no manager rows yet; it checks access itself.
-      if (keyword === 'import') await s.importAllowed(who); else await s.authorize(who);
-      if (keyword === 'import') result = importModal(fictional);
+      // Import may initialize an empty namespace, and operations leads need not be managers: both check access themselves.
+      if (keyword === 'import') { await s.importAllowed(who); result = importModal(fictional); }
+      else if (keyword === 'managers') result = managersModal(await s.managers(who), fictional);
+      else if (!await s.authorize(who)) throw new PilotError('unauthorized', 'Only configured pilot managers may use this workflow.');
       else if (!action) { const report = await s.importReport(who); result = pilotRequestModal(await s.accounts(who), undefined, issueCount(report), fictional, report?.tools); }
       else if (keyword === 'help') result = view('Staffing pilot help', sections(help));
       else if (keyword === 'hq') result = view('Resourcing HQ', sections(resourcingText(await s.roster(who), s.today(), s.units, label(fictional))));
@@ -318,6 +340,14 @@ export async function runPilotJob(job: PilotJob, client: SlackCalls, service: Pi
           : `moved from ${done.change.before.startDate}–${done.change.before.endDate} to ${done.change.after.startDate}–${done.change.after.endDate}`;
         result = view('Assignment updated', [section(`${done.researcherName} on ${done.accountName}: ${what}.${done.reopenedRequest ? `\nThe opening on request ${done.change.requestId} is open again.` : ''}`)]);
         after = async () => { await announce(`${label(fictional)}: ${done.researcherName} on ${done.accountName} ${what} by <@${who.userId}>.`); await refreshHq(); };
+      } else if (job.callback === PILOT_MANAGERS) {
+        if (managerErrors(values)) throw new PilotError('invalid', 'The manager form was incomplete. Reopen /resource-pilot managers.');
+        const action = field(values, 'action')!.selected_option!.value as 'add' | 'remove';
+        const change = await s.setManager(who, field(values, 'user')!.selected_user!, action, field(values, 'name')?.value ?? undefined);
+        const verb = action === 'add' ? 'added' : 'removed';
+        result = { ...managersModal(await s.managers(who), fictional), callback_id: PILOT_MANAGERS };
+        result.blocks.splice(1, 0, section(`${change.name} ${verb} as a pilot manager. The change is recorded.`));
+        after = async () => { await announce(`${label(fictional)}: <@${change.userId}> ${verb} as a pilot manager by <@${who.userId}>.`); };
       } else if (job.callback === PILOT_IMPORT) {
         if (uploadErrors(values) || !options.workbook) throw new PilotError('invalid', options.workbook ? 'The upload form was incomplete. Reopen /resource-pilot import.' : 'Workbook import is not configured for this app.');
         const files = (field(values, 'files') as { files: Upload[] }).files, { read, maxAccounts, config } = options.workbook;

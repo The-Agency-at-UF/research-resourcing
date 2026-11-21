@@ -12,6 +12,7 @@ export function capacityForPeriod(r: DatedResearcher, request: Pick<DatedRequest
   let minFreeHours = r.weeklyCapacityHours, maxAccounts = 0;
   const reasons: string[] = [];
   if (r.availableFrom > request.startDate || r.availableUntil < request.endDate) reasons.push(`Availability ${r.availableFrom} to ${r.availableUntil} does not cover the request`);
+  for (const w of r.away ?? []) if (w.from <= request.endDate && w.until >= request.startDate) reasons.push(`Away ${w.from} to ${w.until}`);
   for (let i = 0; i < boundaries.length - 1; i++) {
     const from = boundaries[i]!, until = boundaries[i + 1]! - 1;
     const active = assignments.filter(a => day(a.startDate) <= from && day(a.endDate) >= from);
@@ -24,6 +25,12 @@ export function capacityForPeriod(r: DatedResearcher, request: Pick<DatedRequest
     if (active.some(a => a.accountId === request.accountId)) reasons.push(`Already assigned to this account on ${period}`);
   }
   return { minFreeHours, maxAccounts, reasons };
+}
+
+/** Active assignments that overlap a period the researcher is away, for import warnings and the HQ view. */
+export function awayConflicts(r: DatedResearcher) {
+  return (r.away ?? []).flatMap(w => r.assignments.filter(a => a.status === 'active' && a.startDate <= w.until && a.endDate >= w.from)
+    .map(a => ({ accountId: a.accountId, from: w.from, until: w.until, assignmentEnd: a.endDate })));
 }
 
 /** Periods where active commitments exceed weekly capacity or the simultaneous account limit. */
@@ -68,7 +75,7 @@ export function recommendForPeriod(rawResearchers: unknown[], rawRequest: unknow
       excluded.push({ researcherId: r.id, dataIssue: false, reasons: capacity.reasons }); continue;
     }
     profiles.set(r.id, r.profile);
-    const { assignments: _assignments, availableFrom: _from, availableUntil: _until, profile: _profile, ...profile } = r;
+    const { assignments: _assignments, availableFrom: _from, availableUntil: _until, profile: _profile, away: _away, ...profile } = r;
     // Synthetic slot IDs represent the peak simultaneous count, never a union of non-overlapping accounts.
     snapshots.push({ ...profile, committedHours: r.weeklyCapacityHours - capacity.minFreeHours,
       currentAccountIds: Array.from({ length: capacity.maxAccounts }, (_, i) => `capacity-slot-${i}`) });

@@ -38,7 +38,7 @@ const workbookSettings = workbookSettingsSchema.parse(await load('config/workboo
 if (process.env.WORKFLOW_TABLE) {
   await verifyPilotTarget();
   const store = configuredPilotStore(), { units, fictional } = await seedSettings(store);
-  registerPilotHandlers(app, new PilotService(store, teamId, undefined, units), {
+  registerPilotHandlers(app, new PilotService(store, teamId, undefined, units, idList(process.env.PILOT_ADMINS)), {
     notify: idList(process.env.PILOT_NOTIFY), hqChannel: idList(process.env.PILOT_HQ_CHANNEL)[0], fictional,
     // Restart after an upload initializes an empty namespace so its units and label are read again.
     workbook: { read: workbookUpload(workbookSettings), maxAccounts: workbookSettings.maxAccounts, config: configSchema.parse(await load('config/scoring-workbook.json')) },

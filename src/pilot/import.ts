@@ -71,9 +71,9 @@ export function planImport(draft: ImportDraft, current: CurrentState) {
     const merged = datedResearcherSchema.parse({ ...fresh, active: true, assignments });
     if (comparable(merged) !== comparable(old) || !same(merged.assignments, old.assignments)) {
       if (comparable({ ...merged, assignments: [] }) !== comparable({ ...old, assignments: [] })) {
-        const changed = (['name', 'skills', 'maxAccounts', 'availableFrom', 'availableUntil', 'interests', 'industryExperienceIds', 'profile', 'active'] as const)
+        const changed = (['name', 'skills', 'maxAccounts', 'availableFrom', 'availableUntil', 'away', 'interests', 'industryExperienceIds', 'profile', 'active'] as const)
           .filter(k => !same(merged[k], old[k]));
-        if (changed.length) lines.push(`${old.name}: ${changed.map(k => ({ maxAccounts: 'account cap', industryExperienceIds: 'industry experience', profile: '1:1 profile', active: 'reactivated' } as Record<string, string>)[k] ?? k.replace(/[A-Z]/g, c => ` ${c.toLowerCase()}`)).join(', ')} updated`);
+        if (changed.length) lines.push(`${old.name}: ${changed.map(k => ({ maxAccounts: 'account cap', industryExperienceIds: 'industry experience', profile: '1:1 profile', active: 'reactivated', away: 'away periods' } as Record<string, string>)[k] ?? k.replace(/[A-Z]/g, c => ` ${c.toLowerCase()}`)).join(', ')} updated`);
       }
       puts.push({ key: row.key, version: row.version + 1, data: merged }); checks.push({ key: row.key, version: row.version });
     }

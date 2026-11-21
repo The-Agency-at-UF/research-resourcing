@@ -19,6 +19,8 @@ export const datedResearcherSchema = z.object({ ...profileShape,
   availableFrom: dateSchema, availableUntil: dateSchema, assignments: z.array(assignmentSchema),
   // Present when a 1:1 profile was imported; shown to managers, never used as capacity by itself.
   profile: z.object({ hoursPerWeek: z.number().finite().nonnegative().optional(), accountCap: z.number().int().positive().optional() }).strict().optional(),
+  // Terms away (study abroad, leave) inside the availability window; no new work may overlap them.
+  away: z.array(z.object({ from: dateSchema, until: dateSchema }).strict().refine(w => w.from <= w.until, 'Invalid away period')).optional(),
 }).strict().refine(r => r.availableFrom <= r.availableUntil, 'Invalid availability window')
   .refine(r => new Set(r.assignments.map(a => a.id)).size === r.assignments.length, 'Duplicate assignment IDs');
 export type DatedRequest = z.infer<typeof datedRequestSchema>;
@@ -47,6 +49,7 @@ export interface Change {
   requestId?: string; before: Span; after: Span; changedAt: string;
 }
 export interface HqLocation { channel: string; ts: string }
+export interface ManagerChange { id: string; actor: Actor; userId: string; action: 'add' | 'remove'; name: string; changedAt: string }
 export class PilotError extends Error {
   constructor(public code: 'unauthorized' | 'invalid' | 'stale' | 'closed' | 'not_found', message: string) { super(message); }
 }
