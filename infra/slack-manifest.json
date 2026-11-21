@@ -18,10 +18,16 @@
       },
       {
         "command": "/resource-pilot",
-        "description": "Fictional dated staffing and manager approval pilot",
-        "should_escape": false
+        "description": "Dated staffing requests, approvals, and assignment changes",
+        "should_escape": false,
+        "usage_hint": "[list | assignments | hq | issues | metrics | help]"
       }
-    ]
+    ],
+    "app_home": {
+      "home_tab_enabled": false,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": true
+    }
   },
   "oauth_config": {
     "scopes": {
