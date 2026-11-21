@@ -9,7 +9,7 @@
 | Microsoft authentication | MSAL Node and Microsoft Graph | Delegated sign-in diagnostic ready; tenant/app access pending |
 | Ranking | Pure TypeScript weighted scoring | Working: five retained, two or three displayed |
 | Slack | Bolt JS local Socket Mode | Fixed demo, request form, opt-in Gemini sample, private results, and local run records; see [setup](slack-demo.md) |
-| Compute | AWS Lambda Node.js 24 | Direct-invoke handler and bundle ready; not deployed |
+| Compute | AWS Lambda Node.js 24 | Deployed: direct-invoke scoring, plus the Slack receiver (signed Function URL) and private worker; see [hosting](hosting.md) |
 | Storage | DynamoDB | Versioned dated staffing pilot and atomic batch approvals; separate legacy audit adapter; see [pilot setup](pilot.md) |
 | Explanations | Factual templates; opt-in Gemini fact selection | CLI and Slack adapter with system instructions, strict validation, and labeled fallback |
 
@@ -19,7 +19,7 @@ The source diagram proposes OpenAI. Roger already has Gemini access, so an opt-i
 
 The SAM template includes scoring, the original recommendation audit tables, and a fictional workflow table for dated researcher schedules, managers, accounts, requests, policies, and decisions. The local pilot uses a restricted assumed role for this workflow table. The direct scoring handler remains separate and does not automatically call persistence or acquire workflow permissions. The legacy CLI retains the top five locally in `artifacts/recommendation-run.json`.
 
-The Slack Socket Mode demo needs a long-running process. Production Lambda would need an HTTPS receiver with signature verification and prompt acknowledgement, or a separately hosted persistent Socket Mode process.
+Slack runs two ways from the same handlers: locally through Socket Mode for development (`npm run slack:pilot`), or hosted on Lambda through a signed Function URL receiver and an asynchronous worker, which suits a tool used a few times a semester. See [hosting](hosting.md).
 
 ## Fine-tuning
 

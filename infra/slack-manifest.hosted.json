@@ -1,0 +1,50 @@
+{
+  "display_information": {
+    "name": "Staffing Recommendation Beta",
+    "description": "Staffing Recommendation Beta",
+    "background_color": "#173b4b"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Staffing Recommendation Beta",
+      "always_online": false
+    },
+    "slash_commands": [
+      {
+        "command": "/resource-demo",
+        "description": "Try fictional staffing recommendations",
+        "usage_hint": "[form]",
+        "should_escape": false,
+        "url": "https://n2a5agvdeg35cldwmv6eo72o3u0zmavm.lambda-url.us-east-2.on.aws/"
+      },
+      {
+        "command": "/resource-pilot",
+        "description": "Dated staffing requests, approvals, and assignment changes",
+        "should_escape": false,
+        "usage_hint": "[list | assignments | hq | issues | metrics | help]",
+        "url": "https://n2a5agvdeg35cldwmv6eo72o3u0zmavm.lambda-url.us-east-2.on.aws/"
+      }
+    ],
+    "app_home": {
+      "home_tab_enabled": false,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": true
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "commands",
+        "chat:write"
+      ]
+    }
+  },
+  "settings": {
+    "socket_mode_enabled": false,
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://n2a5agvdeg35cldwmv6eo72o3u0zmavm.lambda-url.us-east-2.on.aws/"
+    },
+    "org_deploy_enabled": false
+  }
+}
