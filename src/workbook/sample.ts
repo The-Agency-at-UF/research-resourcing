@@ -46,3 +46,19 @@ export function sampleWorkbook() {
   ]);
   return workbook;
 }
+
+/** Fictional 1:1 profiles for the sample workbook, in the shape of data/private/profiles.json. */
+export function sampleProfiles(): unknown {
+  return {
+    source: 'fictional sample 1:1s',
+    accounts: { 'Fictional Screening Co': ['entertainment', 'media'], 'Northwind Bakery': ['food and beverage'], 'Contoso Health': ['healthcare'] },
+    researchers: [
+      { name: 'Ed Epsilon', hoursPerWeek: 4, interests: ['entertainment'], industryExperience: ['Entertainment'], tools: ['Quid'] },
+      { name: 'Flo Zeta', hoursPerWeek: 8, accountCap: 2, interests: ['media'] },
+      { name: 'Ivy Iota', hoursPerWeek: 2, accountCap: 1, interests: ['healthcare'], tools: ['SEMRush'] },
+      { name: 'Ana Alpha', accountCap: 1, tools: ['Excel'] },
+      { name: 'Jo Kappa', availableUntil: '2026-12-11' },
+      { name: 'Zed Nobody', interests: ['travel'] },
+    ],
+  };
+}

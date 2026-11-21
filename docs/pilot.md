@@ -30,7 +30,7 @@ npm run slack:pilot
 npm run pilot:metrics
 ```
 
-To pilot with real data, download the workbook and seed a new namespace: `PILOT_NAMESPACE=workbook-fall26-v1 npm run pilot:seed -- --workbook ~/Downloads/research.xlsx`, then set that namespace in `.env.pilot`. Real-data namespaces drop the "fictional" label on every screen and notice. With no flag, `pilot:seed` creates the original hours-based fictional data used by the service tests; `/resource-pilot` needs a workbook-seeded namespace because its form asks for roles.
+To pilot with real data, download the workbook and seed a new namespace: `PILOT_NAMESPACE=workbook-fall26-v1 npm run pilot:seed -- --workbook ~/Downloads/research.xlsx --profiles data/private/profiles.json` (profiles are optional; see [1:1 profiles](workbook.md#11-profiles)), then set that namespace in `.env.pilot`. Real-data namespaces drop the "fictional" label on every screen and notice. With no flag, `pilot:seed` creates the original hours-based fictional data used by the service tests; `/resource-pilot` needs a workbook-seeded namespace because its form asks for roles.
 
 Seeding an initialized namespace fails, including concurrent repeated seeds. Seeds larger than one transaction commit in 100-item chunks with the `SEED` marker last; an interrupted seed leaves a non-empty namespace that must be abandoned for a new one. Integration tests deliberately create unique `integration-<uuid>` namespaces and retain their records for inspection. `fictional-v1` holds the original hours-based data and is no longer the default.
 
@@ -40,7 +40,7 @@ Register `/resource-pilot` from `infra/slack-manifest.json` in the existing app.
 
 | Command | Shows |
 |---|---|
-| `/resource-pilot` | New request: account, role (strategist or analyst), openings, inclusive dates, optional minimum years since hire |
+| `/resource-pilot` | New request: account, role (strategist or analyst), openings, inclusive dates, optional minimum years since hire, and optional helpful tools when 1:1 profiles are seeded. The account's industry tags are scored automatically. |
 | `/resource-pilot list` or `<request-id>` | Resume a saved request |
 | `/resource-pilot assignments` | Cancel an active or upcoming assignment, or change its dates |
 | `/resource-pilot hq` | Who is on which account from today, current load, and members with no accounts |
